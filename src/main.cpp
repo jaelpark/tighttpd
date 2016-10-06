@@ -1,5 +1,6 @@
 #include "main.h"
 #include "socket.h"
+#include "protocol.h"
 
 #include <csignal>
 #include <stdlib.h>
@@ -8,6 +9,9 @@
 #include <stdarg.h>
 
 #include <sys/epoll.h>
+
+#include <tbb/tbb.h>
+#include <tbb/concurrent_queue.h>
 
 int main(int argc, const char **pargv){
 
@@ -29,31 +33,23 @@ int main(int argc, const char **pargv){
 		return -1;
 	}
 
-	event1.events = EPOLLIN|EPOLLET;
+	event1.events = EPOLLIN;
 	event1.data.fd = sfd;
 	epoll_ctl(efd,EPOLL_CTL_ADD,sfd,&event1);
 
-	//main server loop
+	tbb::concurrent_queue<Protocol::ClientProtocolHTTP *> taskq;
 	for(;;){
-		int n = epoll_wait(efd,events,MAX_EVENTS,-1);
-		for(int i = 0; i < n; ++i){
+		//TODO: if work queue is empty, block indefinitely (-1). Otherwise return immediately (0).
+		//only checking the server socket for now, no event loop needed
+		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1);;){
+			int cfd = server.Accept();
+			if(cfd == -1)
+				break;
 
-			if(events[i].data.fd == sfd){
-				//Event refers to server socket, meaning we have new incoming connections
-				for(;;){
-					int cfd = server.Accept();
-					if(cfd == -1)
-						break;
+			Socket::ClientSocket cs(cfd);
+			Protocol::ClientProtocolHTTP *ptp = new Protocol::ClientProtocolHTTP(cs);
 
-					event1.data.fd = cfd;
-					event1.events = EPOLLIN|EPOLLET;
-					epoll_ctl(efd,EPOLL_CTL_ADD,cfd,&event1);
-
-				}
-			}else{
-				//Incoming data
-				//
-			}
+			taskq.push(ptp);
 		}
 	}
 

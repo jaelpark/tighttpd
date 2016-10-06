@@ -4,7 +4,7 @@
 
 namespace Protocol{
 
-ClientProtocol::ClientProtocol(Socket::ClientSocket *psocket){
+ClientProtocol::ClientProtocol(Socket::ClientSocket _socket) : socket(_socket){
 	//
 }
 
@@ -12,11 +12,12 @@ ClientProtocol::~ClientProtocol(){
 	//
 }
 
-ClientHTTP::ClientHTTP(Socket::ClientSocket *psocket) : ClientProtocol(psocket){
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket){
 	//
+	state = STATE_RECV_REQUEST;
 }
 
-ClientHTTP::~ClientHTTP(){
+ClientProtocolHTTP::~ClientProtocolHTTP(){
 	//
 }
 
