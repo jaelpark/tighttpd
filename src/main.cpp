@@ -16,7 +16,7 @@ int main(int argc, const char **pargv){
 		exit(0);
 	});
 
-	ServerSocket server;
+	Socket::ServerSocket server(0);
 	int sfd = server.Listen();
 
 	//Create the epoll socket monitoring instance
@@ -39,7 +39,7 @@ int main(int argc, const char **pargv){
 		for(int i = 0; i < n; ++i){
 
 			if(events[i].data.fd == sfd){
-				//Event refers to server socket, meaning we have new incoming connection(s)
+				//Event refers to server socket, meaning we have new incoming connections
 				for(;;){
 					int cfd = server.Accept();
 					if(cfd == -1)
@@ -51,6 +51,7 @@ int main(int argc, const char **pargv){
 
 				}
 			}else{
+				//Incoming data
 				//
 			}
 		}

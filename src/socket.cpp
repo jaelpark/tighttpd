@@ -6,7 +6,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-ServerSocket::ServerSocket() : sfd(-1){
+namespace Socket{
+
+ServerSocket::ServerSocket(int socket) : sfd(socket){
 	//
 }
 
@@ -77,4 +79,6 @@ int ServerSocket::Accept(){
 	DebugPrintf("fd = %u, %s:%s\n",cfd,hostb,portb);*/
 
 	return cfd;
+}
+
 }
