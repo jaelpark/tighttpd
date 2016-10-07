@@ -6,6 +6,7 @@ namespace Socket{
 class ServerSocket{
 public:
 	ServerSocket(int);
+	ServerSocket(const ServerSocket &);
 	~ServerSocket();
 	int Listen();
 	int Accept();
@@ -15,7 +16,7 @@ public:
 class ClientSocket{
 public:
 	ClientSocket(int);
-	ClientSocket(ClientSocket &);
+	ClientSocket(const ClientSocket &);
 	~ClientSocket();
 	//int Connect(...);
 	int fd;

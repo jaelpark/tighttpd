@@ -12,6 +12,10 @@ ServerSocket::ServerSocket(int socket) : fd(socket){
 	//
 }
 
+ServerSocket::ServerSocket(const ServerSocket &socket) : fd(socket.fd){
+	//
+}
+
 ServerSocket::~ServerSocket(){
 	//
 }
@@ -79,7 +83,7 @@ ClientSocket::ClientSocket(int socket) : fd(socket){
 	//
 }
 
-ClientSocket::ClientSocket(ClientSocket &socket) : fd(socket.fd){
+ClientSocket::ClientSocket(const ClientSocket &socket) : fd(socket.fd){
 	//
 }
 
