@@ -38,26 +38,32 @@ bool StreamProtocolHTTPrequest::Read(){
 	char buffer1[4096];
 	size_t len = socket.Recv(buffer1,sizeof(buffer1));
 
-	if(len == 0){
-		state = STATE_CLOSED;
-		return true;
+	if(len < 0){
+		if(errno != EAGAIN && errno != EWOULDBLOCK){
+			state = STATE_CLOSED;
+			return true; //close the socket
+		}
 	}else
-	if(len > 0){
+	if(len == 0){
+		{
+			state = STATE_CLOSED;
+			return true;
+		}
+	}else{
 		size_t req = strlen(buffer1);
-		if(req < len){
+		if(req < len || buffer.size()+len > 50000){
 			state = STATE_CORRUPTED;
-			return true; //HTTP 400: unexpected null characters
+			return true; //HTTP 400
 		}
 
-		//TODO: check the size limits
-		buffer.insert(buffer.end(),buffer1,buffer1+req);
+		buffer.insert(buffer.end(),buffer1,buffer1+len);
 		if(strstr(buffer1,"\r\n\r\n")){ //Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
 			state = STATE_SUCCESS;
 			return true;
 		}
+
 	}
 
-	state = STATE_PENDING;
 	return false;
 }
 
@@ -143,6 +149,7 @@ void ClientProtocolHTTP::Run(){
 		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
 			request = spreqstr.substr(0,lf);
 
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
 		static const uint ml[] = {5,4,5};
 		if(request.compare(0,ml[0],"HEAD ") == 0)
 			method = METHOD_HEAD;
