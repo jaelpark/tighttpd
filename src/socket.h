@@ -19,8 +19,8 @@ public:
 	ClientSocket(const ClientSocket &);
 	~ClientSocket();
 	//int Connect(...);
-	int Recv(void *, size_t);
-	int Send(void *, size_t);
+	size_t Recv(void *, size_t);
+	size_t Send(void *, size_t);
 	int fd;
 	//peername?
 };

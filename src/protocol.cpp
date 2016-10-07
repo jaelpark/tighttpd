@@ -2,6 +2,9 @@
 #include "socket.h"
 #include "protocol.h"
 
+#include <tbb/scalable_allocator.h>
+#include <tbb/cache_aligned_allocator.h>
+
 namespace Protocol{
 
 StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket){
@@ -32,21 +35,39 @@ StreamProtocolHTTPrequest::~StreamProtocolHTTPrequest(){
 }
 
 bool StreamProtocolHTTPrequest::Read(){
-	char buffer[4096];
-	uint len = socket.Recv(buffer,sizeof(buffer));
-	//TODO: append to buffer until \n\n or \r\n\r\n or size limit is reacheds
+	char buffer1[4096];
+	int len = socket.Recv(buffer1,sizeof(buffer1));
 
-	//testing
-	printf("%s",buffer);
-	if(strstr(buffer,"\n\n") || strstr(buffer,"\r\n\r\n")){ //TODO: strstr(buffer+last_recv_size,...)
-		printf("----------- DONE\n");
-		return true;
+	if(len > 0){
+		//TODO: check the size limits
+		buffer.insert(buffer.end(),buffer1,buffer1+len);
+		if(strstr(buffer1,"\n\n") || strstr(buffer1,"\r\n\r\n"))
+			return true;
 	}
+
 	return false;
 }
 
 bool StreamProtocolHTTPrequest::Write(){
 	//nothing to send
+	return false;
+}
+
+StreamProtocolHTTPresponse::StreamProtocolHTTPresponse(Socket::ClientSocket _socket) : StreamProtocol(_socket){
+	//
+}
+
+StreamProtocolHTTPresponse::~StreamProtocolHTTPresponse(){
+	//
+}
+
+bool StreamProtocolHTTPresponse::Read(){
+	//nothing to recv
+	return false;
+}
+
+bool StreamProtocolHTTPresponse::Write(){
+	//TODO: send the generated response
 	return false;
 }
 

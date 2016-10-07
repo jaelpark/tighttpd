@@ -90,11 +90,11 @@ ClientSocket::~ClientSocket(){
 	//
 }
 
-int ClientSocket::Recv(void *pbuf, size_t bufl){
-	return recv(fd,pbuf,bufl,0);
+size_t ClientSocket::Recv(void *pbuf, size_t bufl){
+	return recv(fd,pbuf,bufl,MSG_DONTWAIT);
 }
 
-int ClientSocket::Send(void *pbuf, size_t bufl){
+size_t ClientSocket::Send(void *pbuf, size_t bufl){
 	return send(fd,pbuf,bufl,0);
 }
 

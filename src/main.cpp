@@ -10,9 +10,6 @@
 
 #include <sys/epoll.h>
 
-#include <queue>
-
-#include <tbb/tbb.h>
 #include <tbb/flow_graph.h>
 
 int main(int argc, const char **pargv){

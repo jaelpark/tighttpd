@@ -37,6 +37,15 @@ public:
 	~StreamProtocolHTTPrequest();
 	bool Read();
 	bool Write();
+	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
+};
+
+class StreamProtocolHTTPresponse : public StreamProtocol{
+public:
+	StreamProtocolHTTPresponse(Socket::ClientSocket);
+	~StreamProtocolHTTPresponse();
+	bool Read();
+	bool Write();
 };
 
 class ClientProtocolHTTP : public ClientProtocol{
