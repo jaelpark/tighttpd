@@ -13,7 +13,15 @@ public:
 	~StreamProtocol();
 	virtual bool Read() = 0;
 	virtual bool Write() = 0;
+	virtual void Reset() = 0;
 	Socket::ClientSocket socket;
+	enum STATE{
+		STATE_PENDING,
+		STATE_SUCCESS, //required transfer complete
+		STATE_CLOSED, //socket closed by remote
+		STATE_CORRUPTED, //protocol violation
+		STATE_ERROR //some internal error
+	} state;
 };
 
 //general protocol interface which may later be used to expand functionality to other protocols such as FTP for server administration
@@ -37,6 +45,7 @@ public:
 	~StreamProtocolHTTPrequest();
 	bool Read();
 	bool Write();
+	void Reset();
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
@@ -46,6 +55,7 @@ public:
 	~StreamProtocolHTTPresponse();
 	bool Read();
 	bool Write();
+	void Reset();
 };
 
 class ClientProtocolHTTP : public ClientProtocol{
@@ -62,6 +72,12 @@ public:
 		STATE_SEND_RESPONSE,
 		STATE_SEND_DATA
 	} state;
+
+	enum METHOD{
+		METHOD_HEAD,
+		METHOD_GET,
+		METHOD_POST
+	} method;
 };
 
 }

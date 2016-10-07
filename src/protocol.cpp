@@ -7,7 +7,7 @@
 
 namespace Protocol{
 
-StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket){
+StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket), state(STATE_PENDING){
 	//
 }
 
@@ -36,21 +36,39 @@ StreamProtocolHTTPrequest::~StreamProtocolHTTPrequest(){
 
 bool StreamProtocolHTTPrequest::Read(){
 	char buffer1[4096];
-	int len = socket.Recv(buffer1,sizeof(buffer1));
+	size_t len = socket.Recv(buffer1,sizeof(buffer1));
 
+	if(len == 0){
+		state = STATE_CLOSED;
+		return true;
+	}else
 	if(len > 0){
+		size_t req = strlen(buffer1);
+		if(req < len){
+			state = STATE_CORRUPTED;
+			return true; //HTTP 400: unexpected null characters
+		}
+
 		//TODO: check the size limits
-		buffer.insert(buffer.end(),buffer1,buffer1+len);
-		if(strstr(buffer1,"\n\n") || strstr(buffer1,"\r\n\r\n"))
+		buffer.insert(buffer.end(),buffer1,buffer1+req);
+		if(strstr(buffer1,"\r\n\r\n")){ //Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
+			state = STATE_SUCCESS;
 			return true;
+		}
 	}
 
+	state = STATE_PENDING;
 	return false;
 }
 
 bool StreamProtocolHTTPrequest::Write(){
 	//nothing to send
 	return false;
+}
+
+void StreamProtocolHTTPrequest::Reset(){
+	state = STATE_PENDING;
+	buffer.clear();
 }
 
 StreamProtocolHTTPresponse::StreamProtocolHTTPresponse(Socket::ClientSocket _socket) : StreamProtocol(_socket){
@@ -71,6 +89,10 @@ bool StreamProtocolHTTPresponse::Write(){
 	return false;
 }
 
+void StreamProtocolHTTPresponse::Reset(){
+	//
+}
+
 ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket){
 	psp = &spreq;
 	state = STATE_RECV_REQUEST;
@@ -88,6 +110,8 @@ bool ClientProtocolHTTP::Poll(uint sflag1){
 
 	if(state == STATE_RECV_REQUEST){
 		if(sflag1 == PROTOCOL_RECV){
+			//
+
 			sflags = 0;
 			return true;
 		}
@@ -98,6 +122,66 @@ bool ClientProtocolHTTP::Poll(uint sflag1){
 
 void ClientProtocolHTTP::Run(){
 	//
+	if(state == STATE_RECV_REQUEST){
+		if(spreq.state == StreamProtocol::STATE_CORRUPTED){
+			//HTTP 400
+			return;
+		}else
+		if(spreq.state == StreamProtocol::STATE_ERROR){
+			//HTTP 500
+			return;
+		}
+
+		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
+			spreqstr(spreq.buffer.begin(),spreq.buffer.end());
+		//const char *pr = request.c_str();
+
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
+		size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
+
+		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
+			request = spreqstr.substr(0,lf);
+
+		static const uint ml[] = {5,4,5};
+		if(request.compare(0,ml[0],"HEAD ") == 0)
+			method = METHOD_HEAD;
+		else
+		if(request.compare(0,ml[1],"GET ") == 0)
+			method = METHOD_GET;
+		else
+		if(request.compare(0,ml[2],"POST ") == 0)
+			method = METHOD_POST;
+		else{
+			//HTTP 501
+			return;
+		}
+
+		size_t ru = request.find('/',ml[method]);
+		if(ru == -1 || request.find_first_not_of(" ",ml[method]) < ru){
+			//TODO: support Absolute-URI
+			//HTTP 400
+			return;
+		}
+
+		size_t rl = request.find(' ',ru+1);
+		if(rl == -1){
+			//HTTP 400
+			return;
+		}
+
+		size_t hv = request.find("HTTP/1.1",rl+1);
+		if(hv == -1 || request.find_first_not_of(" ",rl+1) < ru){
+			//HTTP 400 or 505
+			return;
+		}
+
+		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
+			requri = request.substr(ru,rl-ru);
+
+		printf("|%s|\n",requri.c_str());
+		//if keep-alive: spreq.Reset();
+	}
 }
 
 }

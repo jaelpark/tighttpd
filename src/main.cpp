@@ -83,6 +83,11 @@ int main(int argc, const char **pargv){
 				}
 			}
 		}
+
+		for(; !taskq.empty();){
+			taskq.front()->Run();
+			taskq.pop();
+		}
 	}
 
 	return 0;
