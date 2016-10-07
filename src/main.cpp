@@ -39,7 +39,7 @@ int main(int argc, const char **pargv){
 	event1.events = EPOLLIN;
 	epoll_ctl(efd,EPOLL_CTL_ADD,sfd,&event1);
 
-	std::queue<Protocol::ClientProtocol *> taskq;
+	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive work
 	for(;;){
 		//TODO: if work queue is empty, block indefinitely (-1). Otherwise return immediately (0).
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
@@ -52,27 +52,38 @@ int main(int argc, const char **pargv){
 					Protocol::ClientProtocolHTTP *ptp =
 						new Protocol::ClientProtocolHTTP(client);
 
+					if(ptp->Poll(PROTOCOL_ACCEPT))
+						taskq.push(ptp);
+
 					event1.data.ptr = ptp;
 					event1.events =
 						(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
 						(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
 					epoll_ctl(efd,EPOLL_CTL_ADD,client.fd,&event1);
-
-					taskq.push(ptp);
 				}
 			}else{
 				Protocol::ClientProtocolHTTP *ptp = (Protocol::ClientProtocolHTTP *)events[i].data.ptr;
+				uint sflags = ptp->sflags;
 
-				if(ptp->sflags & PROTOCOL_RECV && events[i].events & EPOLLIN){
-					//
+				if(ptp->sflags & PROTOCOL_RECV && events[i].events & EPOLLIN && ptp->psp->Read()){
+					if(ptp->Poll(PROTOCOL_RECV))
+						taskq.push(ptp);
 				}
 
-				if(ptp->sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT){
-					//
+				if(ptp->sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT && ptp->psp->Write()){
+					if(ptp->Poll(PROTOCOL_SEND))
+						taskq.push(ptp);
 				}
 
 				//dynamically enable both EPOLLIN and EPOLLOUT depending on the state
-				//EPOLL_CTL_MOD
+				Socket::ClientSocket client = ptp->socket;
+				if(sflags != ptp->sflags){
+					event1.data.ptr = ptp;
+					event1.events =
+						(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
+						(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
+					epoll_ctl(efd,EPOLL_CTL_MOD,client.fd,&event1);
+				}
 			}
 		}
 	}

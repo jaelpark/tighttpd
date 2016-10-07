@@ -44,7 +44,6 @@ int ServerSocket::Listen(){
 		s = bind(fd,pq->ai_addr,pq->ai_addrlen);
 		if(s == 0)
 			break; //successfully bind
-		printf("fail\n");
 		close(fd);
 	}
 	if(!pq){
@@ -89,6 +88,14 @@ ClientSocket::ClientSocket(const ClientSocket &socket) : fd(socket.fd){
 
 ClientSocket::~ClientSocket(){
 	//
+}
+
+int ClientSocket::Recv(void *pbuf, size_t bufl){
+	return recv(fd,pbuf,bufl,0);
+}
+
+int ClientSocket::Send(void *pbuf, size_t bufl){
+	return send(fd,pbuf,bufl,0);
 }
 
 }
