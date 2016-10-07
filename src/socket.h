@@ -19,11 +19,6 @@ public:
 	~ClientSocket();
 	//int Connect(...);
 	int fd;
-	enum STATE{
-		STATE_DORMANT, //Expect no network traffic. Data won't be read. On level-triggered mode, epoll will renotify.
-		STATE_RECV, //Receive data and write it directly to the output stream until it says to stop.
-		STATE_SEND //Send data read from the input stream. Ignore notifications on incoming data until it's time to read again.
-	} state;
 	//peername?
 };
 

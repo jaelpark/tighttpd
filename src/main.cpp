@@ -10,8 +10,10 @@
 
 #include <sys/epoll.h>
 
+#include <queue>
+
 #include <tbb/tbb.h>
-#include <tbb/concurrent_queue.h>
+#include <tbb/flow_graph.h>
 
 int main(int argc, const char **pargv){
 
@@ -33,23 +35,45 @@ int main(int argc, const char **pargv){
 		return -1;
 	}
 
+	event1.data.ptr = &server;
 	event1.events = EPOLLIN;
-	event1.data.fd = sfd;
 	epoll_ctl(efd,EPOLL_CTL_ADD,sfd,&event1);
 
-	tbb::concurrent_queue<Protocol::ClientProtocolHTTP *> taskq;
+	std::queue<Protocol::ClientProtocol *> taskq;
 	for(;;){
 		//TODO: if work queue is empty, block indefinitely (-1). Otherwise return immediately (0).
-		//only checking the server socket for now, no event loop needed
-		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1);;){
-			int cfd = server.Accept();
-			if(cfd == -1)
-				break;
+		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
+			if(events[i].data.ptr == &server){
+				for(;;){
+					Socket::ClientSocket client(server.Accept());
+					if(client.fd == -1)
+						break;
 
-			Socket::ClientSocket cs(cfd);
-			Protocol::ClientProtocolHTTP *ptp = new Protocol::ClientProtocolHTTP(cs);
+					Protocol::ClientProtocolHTTP *ptp =
+						new Protocol::ClientProtocolHTTP(client);
 
-			taskq.push(ptp);
+					event1.data.ptr = ptp;
+					event1.events =
+						(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
+						(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
+					epoll_ctl(efd,EPOLL_CTL_ADD,client.fd,&event1);
+
+					taskq.push(ptp);
+				}
+			}else{
+				Protocol::ClientProtocolHTTP *ptp = (Protocol::ClientProtocolHTTP *)events[i].data.ptr;
+
+				if(ptp->sflags & PROTOCOL_RECV && events[i].events & EPOLLIN){
+					//
+				}
+
+				if(ptp->sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT){
+					//
+				}
+
+				//dynamically enable both EPOLLIN and EPOLLOUT depending on the state
+				//EPOLL_CTL_MOD
+			}
 		}
 	}
 

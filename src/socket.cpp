@@ -72,13 +72,6 @@ int ServerSocket::Accept(){
 
 	int cfd = accept4(fd,&inaddr,&l,SOCK_NONBLOCK); //accept the connection, while also making it non-blocking
 
-	if(cfd > -1){
-	char hostb[NI_MAXHOST], portb[NI_MAXSERV];
-	getnameinfo(&inaddr,l,hostb,sizeof(hostb),portb,sizeof(portb),
-		NI_NUMERICHOST|NI_NUMERICSERV);
-
-	DebugPrintf("fd = %u, %s:%s\n",cfd,hostb,portb);}
-
 	return cfd;
 }
 
