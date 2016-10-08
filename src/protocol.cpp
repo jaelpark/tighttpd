@@ -2,6 +2,8 @@
 #include "socket.h"
 #include "protocol.h"
 
+#include <time.h> //date header field
+
 #include <tbb/scalable_allocator.h>
 #include <tbb/cache_aligned_allocator.h>
 
@@ -53,7 +55,7 @@ bool StreamProtocolHTTPrequest::Read(){
 		size_t req = strlen(buffer1);
 		if(req < len || buffer.size()+len > 50000){
 			state = STATE_CORRUPTED;
-			return true; //HTTP 400
+			return true; //HTTP 413
 		}
 
 		buffer.insert(buffer.end(),buffer1,buffer1+len);
@@ -92,6 +94,7 @@ bool StreamProtocolHTTPresponse::Read(){
 
 bool StreamProtocolHTTPresponse::Write(){
 	//TODO: send the generated response
+	//buffer.erase(buffer.begin(),buffer.begin()+std::min(buffer.size(),4096));
 	return false;
 }
 
@@ -99,7 +102,44 @@ void StreamProtocolHTTPresponse::Reset(){
 	//
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket){
+void StreamProtocolHTTPresponse::Initialize(STATUS status){
+	static const char *pstatstr[] = {
+		"200 OK",
+		"304 Not Found",
+		"400 Bad Request",
+		"403 Forbidden",
+		"404 Not Found",
+		"413 Request Entity Too Large",
+		"500 Internal Server Error",
+		"501 Not Implemented",
+		"505 HTTP Version Not Supported"
+	};
+
+	char buffer1[4096];
+	size_t len;
+
+	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
+	buffer.insert(buffer.end(),buffer1,buffer1+len);
+
+	time_t rt;
+	time(&rt);
+	const struct tm *pti = gmtime(&rt);
+	len = strftime(buffer1,sizeof(buffer1),"Date: %a, %d %b %Y %H:%M:%S %Z\r\n",pti); //mandatory
+	buffer.insert(buffer.end(),buffer1,buffer1+len);
+}
+
+void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield){
+	char buffer1[4096];
+	size_t len = snprintf(buffer1,sizeof(buffer1),"%s: %s\r\n",pname,pfield);
+	buffer.insert(buffer.end(),buffer1,buffer1+len);
+}
+
+void StreamProtocolHTTPresponse::Finalize(){
+	static const char *pclrf = "\r\n";
+	buffer.insert(buffer.end(),pclrf,pclrf+2);
+}
+
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket){
 	psp = &spreq;
 	state = STATE_RECV_REQUEST;
 }
@@ -130,11 +170,17 @@ void ClientProtocolHTTP::Run(){
 	//
 	if(state == STATE_RECV_REQUEST){
 		if(spreq.state == StreamProtocol::STATE_CORRUPTED){
-			//HTTP 400
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
+			spres.Finalize();
 			return;
 		}else
 		if(spreq.state == StreamProtocol::STATE_ERROR){
-			//HTTP 500
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
+			spres.Finalize();
+			return;
+		}else
+		if(spreq.state == StreamProtocol::STATE_CLOSED){
+			//remove the client
 			return;
 		}
 
@@ -160,34 +206,49 @@ void ClientProtocolHTTP::Run(){
 		if(request.compare(0,ml[2],"POST ") == 0)
 			method = METHOD_POST;
 		else{
-			//HTTP 501
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_501);
+			spres.Finalize();
 			return;
 		}
 
 		size_t ru = request.find('/',ml[method]);
 		if(ru == -1 || request.find_first_not_of(" ",ml[method]) < ru){
 			//TODO: support Absolute-URI
-			//HTTP 400
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
+			spres.Finalize();
 			return;
 		}
 
 		size_t rl = request.find(' ',ru+1);
 		if(rl == -1){
-			//HTTP 400
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
+			spres.Finalize();
 			return;
 		}
 
 		size_t hv = request.find("HTTP/1.1",rl+1);
-		if(hv == -1 || request.find_first_not_of(" ",rl+1) < ru){
+		if(hv == -1 || request.find_first_not_of(" ",rl+1) < hv){
 			//HTTP 400 or 505
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
+			spres.Finalize();
 			return;
 		}
 
 		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
 			requri = request.substr(ru,rl-ru);
 
-		printf("|%s|\n",requri.c_str());
+		//printf("|%s|\n",requri.c_str());
 		//if keep-alive: spreq.Reset();
+
+		spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
+		if(method == METHOD_POST){
+			//something
+			//psp = ??
+			state = STATE_RECV_DATA;
+		}else{
+			psp = &spres;
+			state = STATE_SEND_RESPONSE; //unless POST
+		}
 	}
 }
 

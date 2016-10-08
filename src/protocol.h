@@ -56,6 +56,22 @@ public:
 	bool Read();
 	bool Write();
 	void Reset();
+	//
+	enum STATUS{
+		STATUS_200, //OK
+		STATUS_304, //not modified,
+		STATUS_400, //bad request
+		STATUS_403, //forbidden
+		STATUS_404, //not found
+		STATUS_413, //request entity too large
+		STATUS_500, //internal server error
+		STATUS_501, //not implemented
+		STATUS_505, //HTTP version not supported
+	};
+	void Initialize(STATUS);
+	void AddHeader(const char *, const char *);
+	void Finalize();
+	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
 class ClientProtocolHTTP : public ClientProtocol{
@@ -66,6 +82,8 @@ public:
 	void Run();
 	StreamProtocol *psp;
 	StreamProtocolHTTPrequest spreq;
+	StreamProtocolHTTPresponse spres;
+	//TODO: timeout timer
 	enum STATE{
 		STATE_RECV_REQUEST,
 		STATE_RECV_DATA,
