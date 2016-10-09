@@ -84,6 +84,7 @@ public:
 	};
 	void Initialize(STATUS);
 	void AddHeader(const char *, const char *);
+	void FormatHeader(const char *, const char *, ...);
 	void Finalize();
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
@@ -101,6 +102,19 @@ public:
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
+class StreamProtocolFile : public StreamProtocol{
+public:
+	StreamProtocolFile(Socket::ClientSocket);
+	~StreamProtocolFile();
+	bool Read();
+	bool Write();
+	void Reset();
+	//
+	bool Open(const char *);
+	FILE *pf;
+	size_t len;
+};
+
 //class StreamProtocolFile
 
 class ClientProtocolHTTP : public ClientProtocol{
@@ -114,6 +128,7 @@ protected:
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
 	StreamProtocolData spdata;
+	StreamProtocolFile spfile;
 	//TODO: timeout timer
 	enum STATE{
 		STATE_RECV_REQUEST,
@@ -127,6 +142,12 @@ protected:
 		METHOD_GET,
 		METHOD_POST
 	} method;
+
+	enum CONTENT{
+		CONTENT_NONE,
+		CONTENT_DATA,
+		CONTENT_FILE
+	} content;
 };
 
 }

@@ -2,12 +2,16 @@
 #include "socket.h"
 #include "protocol.h"
 
+#include <stdarg.h> //FormatHeader()
 #include <time.h> //date header field
+#include <sys/stat.h> //file stats
 
 #include <tbb/scalable_allocator.h>
 #include <tbb/cache_aligned_allocator.h>
 
 namespace Protocol{
+
+typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
 
 StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket), state(STATE_PENDING){
 	//
@@ -93,10 +97,10 @@ bool StreamProtocolHTTPresponse::Read(){
 }
 
 bool StreamProtocolHTTPresponse::Write(){
-	std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
-		spresstr(buffer.begin(),buffer.end());
+	tbb_string spresstr(buffer.begin(),buffer.end());
 	size_t res = spresstr.size();
 	size_t len = socket.Send(spresstr.c_str(),res);
+	printf("--------\n%s--------\n",spresstr.c_str()); //debug
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		state = STATE_CLOSED;
@@ -148,6 +152,17 @@ void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield
 	buffer.insert(buffer.end(),buffer1,buffer1+len);
 }
 
+void StreamProtocolHTTPresponse::FormatHeader(const char *pname, const char *pfmt, ...){
+	char buffer1[4096];
+
+	va_list args;
+	va_start(args,pfmt);
+	vsnprintf(buffer1,sizeof(buffer1),pfmt,args);
+	va_end(args);
+
+	AddHeader(pname,buffer1);
+}
+
 void StreamProtocolHTTPresponse::Finalize(){
 	static const char *pclrf = "\r\n";
 	buffer.insert(buffer.end(),pclrf,pclrf+2);
@@ -162,8 +177,7 @@ StreamProtocolData::~StreamProtocolData(){
 }
 
 bool StreamProtocolData::Write(){
-	std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
-		spresstr(buffer.begin(),buffer.end());
+	tbb_string spresstr(buffer.begin(),buffer.end());
 	size_t res = spresstr.size();
 	size_t len = socket.Send(spresstr.c_str(),res);
 
@@ -190,13 +204,67 @@ void StreamProtocolData::Reset(){
 	buffer.clear();
 }
 
+StreamProtocolFile::StreamProtocolFile(Socket::ClientSocket _socket) : StreamProtocol(_socket), pf(0){
+	//
+}
+
+StreamProtocolFile::~StreamProtocolFile(){
+	//
+}
+
+bool StreamProtocolFile::Write(){
+	char buffer1[4096];
+	size_t res = fread(buffer1,1,sizeof(buffer1),pf);
+	size_t len = socket.Send(buffer1,res);
+
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		state = STATE_CLOSED;
+		return true;
+	}
+
+	if(len < res){
+		fseek(pf,SEEK_CUR,len-res);
+	}else
+	if(feof(pf)){ //also, len == res
+		state = STATE_SUCCESS;
+		return true;
+	}
+
+	return false;
+}
+
+bool StreamProtocolFile::Read(){
+	//
+}
+
+void StreamProtocolFile::Reset(){
+	state = STATE_PENDING;
+	if(pf){
+		fclose(pf);
+		pf = 0;
+	}
+}
+
+bool StreamProtocolFile::Open(const char *path){
+	if(!(pf = fopen(path,"rb")))
+		return false; //may not be sufficient check in case of directories
+	fseek(pf,0,SEEK_END);
+	len = ftell(pf);
+	fseek(pf,0,SEEK_SET);
+
+	return true;
+}
+
 void StreamProtocolData::Append(const char *pdata, size_t datal){
 	buffer.insert(buffer.end(),pdata,pdata+datal);
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket){
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket){
 	psp = &spreq;
 	state = STATE_RECV_REQUEST;
+
+	method = METHOD_GET;
+	content = CONTENT_NONE;
 }
 
 ClientProtocolHTTP::~ClientProtocolHTTP(){
@@ -205,32 +273,35 @@ ClientProtocolHTTP::~ClientProtocolHTTP(){
 }
 
 ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
+	//main HTTP state machine
 	if(sflag1 == PROTOCOL_ACCEPT){
-		//Nothing to do, all the relevant flags have already been set. Awaiting for request.
+		//Nothing to do, all the relevant flags have already been set in class constructor. Awaiting for request.
 		return POLL_SKIP;
 	}
 
-	if(state == STATE_RECV_REQUEST){
+	//no need to check sflags, since only either PROTOCOL_SEND or RECV is enabled according to current state
+	if(state == STATE_RECV_REQUEST || state == STATE_RECV_DATA){
 		//sflag1 == PROTOCOL_RECV
 		sflags = 0; //do not expect traffic until request has been processed
 		return POLL_RUN; //handle the request in Run()
 
 	}else
 	if(state == STATE_SEND_RESPONSE){
-		if(method == METHOD_HEAD)
+		if(content == CONTENT_NONE)
 			return POLL_CLOSE;
 
 		const char test[] = "Some content\r\n";
 		spdata.Append(test,strlen(test));
 
-		psp = &spdata;
+		psp = (content == CONTENT_DATA)?
+			(StreamProtocolData*)&spdata:(StreamProtocolData*)&spfile;
 		state = STATE_SEND_DATA;
 		//sflags = PROTOCOL_SEND; //keep sending
 
 		return POLL_SKIP;
 	}else
 	if(state == STATE_SEND_DATA){
-		//
+		psp->Reset();
 		return POLL_CLOSE;
 	}
 
@@ -240,96 +311,150 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 void ClientProtocolHTTP::Run(){
 	//
 	if(state == STATE_RECV_REQUEST){
-		if(spreq.state == StreamProtocol::STATE_CORRUPTED){
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
-			spres.Finalize();
-			return;
-		}else
-		if(spreq.state == StreamProtocol::STATE_ERROR){
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
-			spres.Finalize();
-			return;
-		}else
-		if(spreq.state == StreamProtocol::STATE_CLOSED){
-			//remove the client
-			return;
+		try{
+			if(spreq.state == StreamProtocol::STATE_CORRUPTED){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
+				spres.Finalize();
+				throw(0);
+			}else
+			if(spreq.state == StreamProtocol::STATE_ERROR){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
+				spres.Finalize();
+				throw(0);
+			}else
+			if(spreq.state == StreamProtocol::STATE_CLOSED){
+				//remove the client
+				return;
+			}
+
+			tbb_string spreqstr(spreq.buffer.begin(),spreq.buffer.end());
+
+			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
+			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
+			size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
+
+			tbb_string request = spreqstr.substr(0,lf);
+
+			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
+			static const uint ml[] = {5,4,5};
+			if(request.compare(0,ml[0],"HEAD ") == 0)
+				method = METHOD_HEAD;
+			else
+			if(request.compare(0,ml[1],"GET ") == 0)
+				method = METHOD_GET;
+			else
+			if(request.compare(0,ml[2],"POST ") == 0)
+				method = METHOD_POST;
+			else{
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_501);
+				spres.Finalize();
+				throw(0);
+			}
+
+			size_t ru = request.find('/',ml[method]);
+			if(ru == -1 || request.find_first_not_of(" ",ml[method]) < ru){
+				//TODO: support Absolute-URI
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
+				spres.Finalize();
+				throw(0);
+			}
+
+			size_t rl = request.find(' ',ru+1);
+			if(rl == -1){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
+				spres.Finalize();
+				throw(0);
+			}
+
+			size_t hv = request.find("HTTP/1.1",rl+1);
+			if(hv == -1 || request.find_first_not_of(" ",rl+1) < hv){
+				//HTTP 400 or 505
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
+				spres.Finalize();
+				throw(0);
+			}
+
+			tbb_string requri = request.substr(ru,rl-ru);
+			tbb_string locald = tbb_string(".")+requri;
+
+			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
+			//printf("%s|\n",path); //debug
+
+			struct stat statbuf;
+			if(stat(path,&statbuf) == -1){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
+				spres.Finalize();
+				//TODO: set psp to 404 file.
+				throw(0);
+			}
+
+			/*int statr, d = 0;
+			do{
+				tbb_string t = locald+index[d];
+				statr = stat(t.c_str(),&statbuf);
+			}while(statr == -1 || S_ISDIR(statbuf.st_mode));*/
+
+
+			/*if(S_ISDIR(statbuf.st_mode)){
+				//TODO: locate the index-file if uri points to a directory
+				//alternative list directory if enabled
+				//currently this just gives http 500
+			}*/
+
+			if(method != METHOD_HEAD){
+				//if(!spfile.Open(path)){
+				if(S_ISDIR(statbuf.st_mode) || !spfile.Open(path)){
+					spres.Initialize(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was verified to exist
+					spres.Finalize();
+					throw(0);
+				}
+
+				//spres.FormatHeader("Content-Length","%u",statbuf.st_size);
+				//Last-Modified
+
+				content = CONTENT_FILE;
+			}
+
+			spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
+			spres.AddHeader("Connection","close");
+
+			//in case of preprocessor, prepare another StreamProtocol
+
+			//if keep-alive: spreq.Reset();
+
+			//Get the file size or prepare StreamProtocolData and determine its final length.
+			//Connection: keep-alive requires Content-Length
+
+			spres.Finalize(); //don't finalize if the preprocessor wants to add something
+
+			if(method == METHOD_POST){
+				psp = &spdata;
+				state = STATE_RECV_DATA;
+				//
+				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
+			}else{
+				psp = &spres;
+				state = STATE_SEND_RESPONSE;
+				//
+				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
+			}
+
+		}catch(...){
+			//prepare the fail response
+			{
+				psp = &spres;
+				state = STATE_SEND_RESPONSE;
+				sflags = PROTOCOL_SEND;
+			}
 		}
+	}/*else
+	if(state == STATE_RECV_DATA){
+		//POST complete
+		//write it to preprocessor stdin or whatever
 
-		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
-			spreqstr(spreq.buffer.begin(),spreq.buffer.end());
-		//const char *pr = request.c_str();
-
-		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
-		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
-		size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
-
-		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
-			request = spreqstr.substr(0,lf);
-
-		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
-		static const uint ml[] = {5,4,5};
-		if(request.compare(0,ml[0],"HEAD ") == 0)
-			method = METHOD_HEAD;
-		else
-		if(request.compare(0,ml[1],"GET ") == 0)
-			method = METHOD_GET;
-		else
-		if(request.compare(0,ml[2],"POST ") == 0)
-			method = METHOD_POST;
-		else{
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_501);
-			spres.Finalize();
-			return;
-		}
-
-		size_t ru = request.find('/',ml[method]);
-		if(ru == -1 || request.find_first_not_of(" ",ml[method]) < ru){
-			//TODO: support Absolute-URI
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-			spres.Finalize();
-			return;
-		}
-
-		size_t rl = request.find(' ',ru+1);
-		if(rl == -1){
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-			spres.Finalize();
-			return;
-		}
-
-		size_t hv = request.find("HTTP/1.1",rl+1);
-		if(hv == -1 || request.find_first_not_of(" ",rl+1) < hv){
-			//HTTP 400 or 505
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
-			spres.Finalize();
-			return;
-		}
-
-		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
-			requri = request.substr(ru,rl-ru);
-
-		printf("%s|\n",requri.c_str());
-		//if keep-alive: spreq.Reset();
-
-		//Get the file size or prepare StreamProtocolData and determine its final length.
-		//Connection: keep-alive requires Content-Length
-
-		spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
-		spres.AddHeader("Connection","close");
-		spres.Finalize();
-
-		if(method == METHOD_POST){
-			psp = &spdata;
-			state = STATE_RECV_DATA;
-			//
-			sflags = PROTOCOL_RECV; //re-enable EPOLLIN
-		}else{
-			psp = &spres;
-			state = STATE_SEND_RESPONSE;
-			//
-			sflags = PROTOCOL_SEND; //switch to EPOLLOUT
-		}
-	}
+		//state = STATE_SEND_RESPONSE;
+		//sflags = PROTOCOL_SEND;
+	}*/
 }
 
 }
