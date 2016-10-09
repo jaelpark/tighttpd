@@ -8,7 +8,7 @@ public:
 	ServerSocket(int);
 	ServerSocket(const ServerSocket &);
 	~ServerSocket();
-	int Listen();
+	int Listen(const char *);
 	int Accept() const;
 	void Close() const;
 	int fd; //socket file descriptor

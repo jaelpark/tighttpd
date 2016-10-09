@@ -20,7 +20,7 @@ ServerSocket::~ServerSocket(){
 	//
 }
 
-int ServerSocket::Listen(){
+int ServerSocket::Listen(const char *pport){
 	//Create and bind the server socket. The following piece is very generic,
 	//see the linux getaddrinfo manpages for information.
 
@@ -31,7 +31,7 @@ int ServerSocket::Listen(){
 	h.ai_flags = AI_PASSIVE;
 
 	struct addrinfo *pr, *pq; //result
-	int s = getaddrinfo(0,"8080",&h,&pr); //note: port 80 (and < 1024 generally) requires root (or port redirection)
+	int s = getaddrinfo(0,pport,&h,&pr); //note: port 80 (and < 1024 generally) requires root (or port redirection)
 	if(s != 0){
 		DebugPrintf("Error: getaddrinfo: %s\n",gai_strerror(s));
 		return -1;

@@ -33,8 +33,15 @@ class ClientProtocol{
 public:
 	ClientProtocol(Socket::ClientSocket, uint);
 	~ClientProtocol();
+	void * operator new(std::size_t);
+	void operator delete(void *);
 	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
-	virtual bool Poll(uint) = 0;
+	enum POLL{
+		POLL_SKIP,
+		POLL_RUN,
+		POLL_CLOSE
+	};
+	virtual POLL Poll(uint) = 0;
 	//Run() method for parallel execution
 	virtual void Run() = 0;
 	Socket::ClientSocket socket;
@@ -97,7 +104,7 @@ class ClientProtocolHTTP : public ClientProtocol{
 public:
 	ClientProtocolHTTP(Socket::ClientSocket);
 	~ClientProtocolHTTP();
-	bool Poll(uint);
+	POLL Poll(uint);
 	void Run();
 	StreamProtocol *psp;
 	StreamProtocolHTTPrequest spreq;

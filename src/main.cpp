@@ -13,14 +13,15 @@
 #include <tbb/flow_graph.h>
 
 int main(int argc, const char **pargv){
-
 	signal(SIGINT,[](int s)->void{
 		DebugPrintf("Received SIGINT\n");
 		exit(0);
 	});
 
+	const char *pport = argc > 1?pargv[1]:"8080";
+
 	Socket::ServerSocket server(0);
-	int sfd = server.Listen();
+	int sfd = server.Listen(pport);
 
 	//Create the epoll socket monitoring instance
 	//-> man epoll
@@ -49,8 +50,15 @@ int main(int argc, const char **pargv){
 					Protocol::ClientProtocolHTTP *ptp =
 						new Protocol::ClientProtocolHTTP(client);
 
-					if(ptp->Poll(PROTOCOL_ACCEPT))
+					switch(ptp->Poll(PROTOCOL_ACCEPT)){
+					case Protocol::ClientProtocol::POLL_RUN:
 						taskq.push(ptp);
+						break;
+					case Protocol::ClientProtocol::POLL_CLOSE:
+						epoll_ctl(efd,EPOLL_CTL_DEL,client.fd,0);
+						delete ptp;
+						continue;
+					}
 
 					event1.data.ptr = ptp;
 					event1.events =
@@ -60,20 +68,35 @@ int main(int argc, const char **pargv){
 				}
 			}else{
 				Protocol::ClientProtocolHTTP *ptp = (Protocol::ClientProtocolHTTP *)events[i].data.ptr;
+				Socket::ClientSocket client = ptp->socket;
+
 				uint sflags = ptp->sflags;
 
 				if(ptp->sflags & PROTOCOL_RECV && events[i].events & EPOLLIN && ptp->psp->Read()){
-					if(ptp->Poll(PROTOCOL_RECV))
+					switch(ptp->Poll(PROTOCOL_RECV)){
+					case Protocol::ClientProtocol::POLL_RUN:
 						taskq.push(ptp);
+						break;
+					case Protocol::ClientProtocol::POLL_CLOSE:
+						epoll_ctl(efd,EPOLL_CTL_DEL,client.fd,0);
+						delete ptp;
+						continue;
+					}
 				}
 
 				if(ptp->sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT && ptp->psp->Write()){
-					if(ptp->Poll(PROTOCOL_SEND))
+					switch(ptp->Poll(PROTOCOL_SEND)){
+					case Protocol::ClientProtocol::POLL_RUN:
 						taskq.push(ptp);
+						break;
+					case Protocol::ClientProtocol::POLL_CLOSE:
+						epoll_ctl(efd,EPOLL_CTL_DEL,client.fd,0);
+						delete ptp;
+						continue;
+					}
 				}
 
 				//dynamically enable both EPOLLIN and EPOLLOUT depending on the state
-				Socket::ClientSocket client = ptp->socket;
 				if(sflags != ptp->sflags){
 					event1.data.ptr = ptp;
 					event1.events =
@@ -85,7 +108,19 @@ int main(int argc, const char **pargv){
 		}
 
 		for(; !taskq.empty();){
-			taskq.front()->Run();
+			Protocol::ClientProtocol *ptp = taskq.front();
+			uint sflags = ptp->sflags;
+
+			ptp->Run();
+
+			if(sflags != ptp->sflags){
+				event1.data.ptr = ptp;
+				event1.events =
+					(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
+					(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
+				epoll_ctl(efd,EPOLL_CTL_MOD,ptp->socket.fd,&event1);
+			}
+
 			taskq.pop();
 		}
 	}

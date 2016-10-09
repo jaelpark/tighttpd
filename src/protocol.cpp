@@ -18,17 +18,7 @@ StreamProtocol::~StreamProtocol(){
 }
 
 StreamProtocol::STATE StreamProtocol::SocketStatus(size_t r) const{
-	if(r < 0){
-		if(errno != EAGAIN && errno != EWOULDBLOCK)
-			return STATE_CLOSED;
-	}else
-	if(r == 0){
-		{
-			return STATE_CLOSED;
-		}
-	}
-
-	return STATE_PENDING;
+	return ((r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || r == 0)?STATE_CLOSED:STATE_PENDING;
 }
 
 ClientProtocol::ClientProtocol(Socket::ClientSocket _socket, uint _sflags) : socket(_socket), sflags(_sflags){
@@ -37,6 +27,14 @@ ClientProtocol::ClientProtocol(Socket::ClientSocket _socket, uint _sflags) : soc
 
 ClientProtocol::~ClientProtocol(){
 	//
+}
+
+void * ClientProtocol::operator new(std::size_t len){
+	return scalable_malloc(len);
+}
+
+void ClientProtocol::operator delete(void *p){
+	scalable_free(p);
 }
 
 //----------------------------------------------------------------
@@ -56,7 +54,7 @@ bool StreamProtocolHTTPrequest::Read(){
 
 	STATE s = SocketStatus(len);
 	if(s != STATE_PENDING){
-		state = s;
+		state = s; //some error occurred
 		return true;
 	}
 
@@ -103,6 +101,7 @@ bool StreamProtocolHTTPresponse::Write(){
 		spresstr(buffer.begin(),buffer.end());
 	size_t res = spresstr.size();
 	size_t len = socket.Send(spresstr.c_str(),res);
+	printf("--------------\n%s\n--------------\n",spresstr.c_str());
 
 	STATE s = SocketStatus(len);
 	if(s != STATE_PENDING){
@@ -169,7 +168,22 @@ StreamProtocolData::~StreamProtocolData(){
 }
 
 bool StreamProtocolData::Write(){
-	//
+	std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
+		spresstr(buffer.begin(),buffer.end());
+	size_t res = spresstr.size();
+	size_t len = socket.Send(spresstr.c_str(),res);
+
+	STATE s = SocketStatus(len);
+	if(s != STATE_PENDING){
+		state = s;
+		return true;
+	}
+
+	if(len == res){
+		state = STATE_SUCCESS;
+		return true;
+	}else buffer.erase(buffer.begin(),buffer.begin()+len);
+
 	return false;
 }
 
@@ -194,37 +208,41 @@ ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientPro
 
 ClientProtocolHTTP::~ClientProtocolHTTP(){
 	//
+	socket.Close();
 }
 
-bool ClientProtocolHTTP::Poll(uint sflag1){
+ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 	if(sflag1 == PROTOCOL_ACCEPT){
 		//Nothing to do, all the relevant flags have already been set. Awaiting for request.
-		return false;
+		return POLL_SKIP;
 	}
 
 	if(state == STATE_RECV_REQUEST){
 		//sflag1 == PROTOCOL_RECV
 		sflags = 0; //do not expect traffic until request has been processed
-		return true; //handle the request in Run()
+		return POLL_RUN; //handle the request in Run()
 
 	}else
 	if(state == STATE_SEND_RESPONSE){
 		if(method == METHOD_HEAD)
-			return false;
+			return POLL_CLOSE;
 
 		const char test[] = "Some content\r\n";
 		spdata.Put(test,strlen(test));
+
 		psp = &spdata;
+		state = STATE_SEND_DATA;
 		//sflags = PROTOCOL_SEND; //keep sending
 
-		return false;
+		return POLL_SKIP;
 	}else
 	if(state == STATE_SEND_DATA){
 		//
-		return false;
+		printf("content sent\n");
+		return POLL_CLOSE;
 	}
 
-	return false;
+	return POLL_SKIP;
 }
 
 void ClientProtocolHTTP::Run(){
@@ -298,13 +316,14 @@ void ClientProtocolHTTP::Run(){
 		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
 			requri = request.substr(ru,rl-ru);
 
-		//printf("|%s|\n",requri.c_str());
+		printf("|%s|\n",requri.c_str());
 		//if keep-alive: spreq.Reset();
 
 		//Get the file size or prepare StreamProtocolData and determine its final length.
 		//Connection: keep-alive requires Content-Length
 
 		spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
+		spres.AddHeader("Connection","close");
 		spres.Finalize();
 
 		if(method == METHOD_POST){
