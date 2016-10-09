@@ -14,14 +14,18 @@ public:
 	virtual bool Read() = 0;
 	virtual bool Write() = 0;
 	virtual void Reset() = 0;
-	Socket::ClientSocket socket;
 	enum STATE{
 		STATE_PENDING,
 		STATE_SUCCESS, //required transfer complete
 		STATE_CLOSED, //socket closed by remote
 		STATE_CORRUPTED, //protocol violation
 		STATE_ERROR //some internal error
-	} state;
+	};
+protected:
+	STATE SocketStatus(size_t) const; //helper to check send/recv return values
+public:
+	Socket::ClientSocket socket;
+	STATE state;
 };
 
 //general protocol interface which may later be used to expand functionality to other protocols such as FTP for server administration
@@ -74,6 +78,21 @@ public:
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
+class StreamProtocolData : public StreamProtocol{
+public:
+	StreamProtocolData(Socket::ClientSocket);
+	~StreamProtocolData();
+	//data io
+	bool Read();
+	bool Write();
+	void Reset();
+	//
+	void Put(const char *, size_t);
+	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
+};
+
+//class StreamProtocolFile
+
 class ClientProtocolHTTP : public ClientProtocol{
 public:
 	ClientProtocolHTTP(Socket::ClientSocket);
@@ -83,6 +102,7 @@ public:
 	StreamProtocol *psp;
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
+	StreamProtocolData spdata;
 	//TODO: timeout timer
 	enum STATE{
 		STATE_RECV_REQUEST,

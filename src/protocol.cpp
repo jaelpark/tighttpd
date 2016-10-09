@@ -17,6 +17,20 @@ StreamProtocol::~StreamProtocol(){
 	//
 }
 
+StreamProtocol::STATE StreamProtocol::SocketStatus(size_t r) const{
+	if(r < 0){
+		if(errno != EAGAIN && errno != EWOULDBLOCK)
+			return STATE_CLOSED;
+	}else
+	if(r == 0){
+		{
+			return STATE_CLOSED;
+		}
+	}
+
+	return STATE_PENDING;
+}
+
 ClientProtocol::ClientProtocol(Socket::ClientSocket _socket, uint _sflags) : socket(_socket), sflags(_sflags){
 	//
 }
@@ -40,30 +54,22 @@ bool StreamProtocolHTTPrequest::Read(){
 	char buffer1[4096];
 	size_t len = socket.Recv(buffer1,sizeof(buffer1));
 
-	if(len < 0){
-		if(errno != EAGAIN && errno != EWOULDBLOCK){
-			state = STATE_CLOSED;
-			return true; //close the socket
-		}
-	}else
-	if(len == 0){
-		{
-			state = STATE_CLOSED;
-			return true;
-		}
-	}else{
-		size_t req = strlen(buffer1);
-		if(req < len || buffer.size()+len > 50000){
-			state = STATE_CORRUPTED;
-			return true; //HTTP 413
-		}
+	STATE s = SocketStatus(len);
+	if(s != STATE_PENDING){
+		state = s;
+		return true;
+	}
 
-		buffer.insert(buffer.end(),buffer1,buffer1+len);
-		if(strstr(buffer1,"\r\n\r\n")){ //Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
-			state = STATE_SUCCESS;
-			return true;
-		}
+	size_t req = strlen(buffer1);
+	if(req < len || buffer.size()+len > 50000){
+		state = STATE_CORRUPTED;
+		return true; //HTTP 413
+	}
 
+	buffer.insert(buffer.end(),buffer1,buffer1+len);
+	if(strstr(buffer1,"\r\n\r\n")){ //Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
+		state = STATE_SUCCESS;
+		return true;
 	}
 
 	return false;
@@ -93,13 +99,28 @@ bool StreamProtocolHTTPresponse::Read(){
 }
 
 bool StreamProtocolHTTPresponse::Write(){
-	//TODO: send the generated response
-	//buffer.erase(buffer.begin(),buffer.begin()+std::min(buffer.size(),4096));
+	std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
+		spresstr(buffer.begin(),buffer.end());
+	size_t res = spresstr.size();
+	size_t len = socket.Send(spresstr.c_str(),res);
+
+	STATE s = SocketStatus(len);
+	if(s != STATE_PENDING){
+		state = s;
+		return true;
+	}
+
+	if(len == res){
+		state = STATE_SUCCESS;
+		return true;
+	}else buffer.erase(buffer.begin(),buffer.begin()+len);
+
 	return false;
 }
 
 void StreamProtocolHTTPresponse::Reset(){
-	//
+	state = STATE_PENDING;
+	buffer.clear();
 }
 
 void StreamProtocolHTTPresponse::Initialize(STATUS status){
@@ -139,7 +160,34 @@ void StreamProtocolHTTPresponse::Finalize(){
 	buffer.insert(buffer.end(),pclrf,pclrf+2);
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket){
+StreamProtocolData::StreamProtocolData(Socket::ClientSocket _socket) : StreamProtocol(_socket){
+	//
+}
+
+StreamProtocolData::~StreamProtocolData(){
+	//
+}
+
+bool StreamProtocolData::Write(){
+	//
+	return false;
+}
+
+bool StreamProtocolData::Read(){
+	//
+	return false;
+}
+
+void StreamProtocolData::Reset(){
+	state = STATE_PENDING;
+	buffer.clear();
+}
+
+void StreamProtocolData::Put(const char *pdata, size_t datal){
+	buffer.insert(buffer.end(),pdata,pdata+datal);
+}
+
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket){
 	psp = &spreq;
 	state = STATE_RECV_REQUEST;
 }
@@ -155,12 +203,25 @@ bool ClientProtocolHTTP::Poll(uint sflag1){
 	}
 
 	if(state == STATE_RECV_REQUEST){
-		if(sflag1 == PROTOCOL_RECV){
-			//
+		//sflag1 == PROTOCOL_RECV
+		sflags = 0; //do not expect traffic until request has been processed
+		return true; //handle the request in Run()
 
-			sflags = 0;
-			return true;
-		}
+	}else
+	if(state == STATE_SEND_RESPONSE){
+		if(method == METHOD_HEAD)
+			return false;
+
+		const char test[] = "Some content\r\n";
+		spdata.Put(test,strlen(test));
+		psp = &spdata;
+		//sflags = PROTOCOL_SEND; //keep sending
+
+		return false;
+	}else
+	if(state == STATE_SEND_DATA){
+		//
+		return false;
 	}
 
 	return false;
@@ -240,14 +301,23 @@ void ClientProtocolHTTP::Run(){
 		//printf("|%s|\n",requri.c_str());
 		//if keep-alive: spreq.Reset();
 
+		//Get the file size or prepare StreamProtocolData and determine its final length.
+		//Connection: keep-alive requires Content-Length
+
 		spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
+		spres.Finalize();
+
 		if(method == METHOD_POST){
 			//something
 			//psp = ??
 			state = STATE_RECV_DATA;
+			//
+			sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 		}else{
 			psp = &spres;
-			state = STATE_SEND_RESPONSE; //unless POST
+			state = STATE_SEND_RESPONSE;
+			//
+			sflags = PROTOCOL_SEND; //switch to EPOLLOUT
 		}
 	}
 }
