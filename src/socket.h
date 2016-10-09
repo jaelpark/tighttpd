@@ -9,7 +9,8 @@ public:
 	ServerSocket(const ServerSocket &);
 	~ServerSocket();
 	int Listen();
-	int Accept();
+	int Accept() const;
+	void Close() const;
 	int fd; //socket file descriptor
 };
 
@@ -19,8 +20,9 @@ public:
 	ClientSocket(const ClientSocket &);
 	~ClientSocket();
 	//int Connect(...);
-	size_t Recv(void *, size_t);
-	size_t Send(void *, size_t);
+	size_t Recv(void *, size_t) const;
+	size_t Send(const void *, size_t) const;
+	void Close() const;
 	int fd;
 	//peername?
 };

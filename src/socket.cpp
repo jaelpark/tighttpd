@@ -69,13 +69,17 @@ int ServerSocket::Listen(){
 	return fd;
 }
 
-int ServerSocket::Accept(){
+int ServerSocket::Accept() const{
 	struct sockaddr inaddr;
 	uint l = sizeof(inaddr);
 
 	int cfd = accept4(fd,&inaddr,&l,SOCK_NONBLOCK); //accept the connection, while also making it non-blocking
 
 	return cfd;
+}
+
+void ServerSocket::Close() const{
+	close(fd);
 }
 
 ClientSocket::ClientSocket(int socket) : fd(socket){
@@ -90,12 +94,16 @@ ClientSocket::~ClientSocket(){
 	//
 }
 
-size_t ClientSocket::Recv(void *pbuf, size_t bufl){
+size_t ClientSocket::Recv(void *pbuf, size_t bufl) const{
 	return recv(fd,pbuf,bufl,MSG_DONTWAIT);
 }
 
-size_t ClientSocket::Send(void *pbuf, size_t bufl){
+size_t ClientSocket::Send(const void *pbuf, size_t bufl) const{
 	return send(fd,pbuf,bufl,0);
+}
+
+void ClientSocket::Close() const{
+	close(fd);
 }
 
 }
