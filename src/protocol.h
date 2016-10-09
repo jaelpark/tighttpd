@@ -21,9 +21,6 @@ public:
 		STATE_CORRUPTED, //protocol violation
 		STATE_ERROR //some internal error
 	};
-protected:
-	STATE SocketStatus(size_t) const; //helper to check send/recv return values
-public:
 	Socket::ClientSocket socket;
 	STATE state;
 };
@@ -32,18 +29,24 @@ public:
 class ClientProtocol{
 public:
 	ClientProtocol(Socket::ClientSocket, uint);
-	~ClientProtocol();
+	virtual ~ClientProtocol();
 	void * operator new(std::size_t);
 	void operator delete(void *);
-	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
+	inline StreamProtocol * GetStream() const{return psp;}
+	inline Socket::ClientSocket GetSocket() const{return socket;}
+	inline uint GetFlags() const{return sflags;}
 	enum POLL{
 		POLL_SKIP,
 		POLL_RUN,
 		POLL_CLOSE
 	};
+	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
 	virtual POLL Poll(uint) = 0;
 	//Run() method for parallel execution
 	virtual void Run() = 0;
+	//
+protected:
+	StreamProtocol *psp;
 	Socket::ClientSocket socket;
 	//send|recv state flags indicating the expected state according to protocol rules
 	//epoll_ctl is controlled in a generic way using these flags
@@ -94,7 +97,7 @@ public:
 	bool Write();
 	void Reset();
 	//
-	void Put(const char *, size_t);
+	void Append(const char *, size_t);
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
@@ -104,9 +107,10 @@ class ClientProtocolHTTP : public ClientProtocol{
 public:
 	ClientProtocolHTTP(Socket::ClientSocket);
 	~ClientProtocolHTTP();
+	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
 	void Run();
-	StreamProtocol *psp;
+protected:
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
 	StreamProtocolData spdata;

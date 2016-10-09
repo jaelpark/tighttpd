@@ -62,17 +62,17 @@ int main(int argc, const char **pargv){
 
 					event1.data.ptr = ptp;
 					event1.events =
-						(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
-						(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
+						(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
+						(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
 					epoll_ctl(efd,EPOLL_CTL_ADD,client.fd,&event1);
 				}
 			}else{
-				Protocol::ClientProtocolHTTP *ptp = (Protocol::ClientProtocolHTTP *)events[i].data.ptr;
-				Socket::ClientSocket client = ptp->socket;
+				Protocol::ClientProtocol *ptp = (Protocol::ClientProtocolHTTP *)events[i].data.ptr;
+				Socket::ClientSocket client = ptp->GetSocket();
 
-				uint sflags = ptp->sflags;
+				uint sflags = ptp->GetFlags();
 
-				if(ptp->sflags & PROTOCOL_RECV && events[i].events & EPOLLIN && ptp->psp->Read()){
+				if(sflags & PROTOCOL_RECV && events[i].events & EPOLLIN && ptp->GetStream()->Read()){
 					switch(ptp->Poll(PROTOCOL_RECV)){
 					case Protocol::ClientProtocol::POLL_RUN:
 						taskq.push(ptp);
@@ -84,7 +84,7 @@ int main(int argc, const char **pargv){
 					}
 				}
 
-				if(ptp->sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT && ptp->psp->Write()){
+				if(sflags & PROTOCOL_SEND && events[i].events & EPOLLOUT && ptp->GetStream()->Write()){
 					switch(ptp->Poll(PROTOCOL_SEND)){
 					case Protocol::ClientProtocol::POLL_RUN:
 						taskq.push(ptp);
@@ -97,11 +97,11 @@ int main(int argc, const char **pargv){
 				}
 
 				//dynamically enable both EPOLLIN and EPOLLOUT depending on the state
-				if(sflags != ptp->sflags){
+				if(sflags != ptp->GetFlags()){
 					event1.data.ptr = ptp;
 					event1.events =
-						(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
-						(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
+						(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
+						(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
 					epoll_ctl(efd,EPOLL_CTL_MOD,client.fd,&event1);
 				}
 			}
@@ -109,16 +109,16 @@ int main(int argc, const char **pargv){
 
 		for(; !taskq.empty();){
 			Protocol::ClientProtocol *ptp = taskq.front();
-			uint sflags = ptp->sflags;
+			uint sflags = ptp->GetFlags();
 
 			ptp->Run();
 
-			if(sflags != ptp->sflags){
+			if(sflags != ptp->GetFlags()){
 				event1.data.ptr = ptp;
 				event1.events =
-					(ptp->sflags & PROTOCOL_RECV?EPOLLIN:0)|
-					(ptp->sflags & PROTOCOL_SEND?EPOLLOUT:0);
-				epoll_ctl(efd,EPOLL_CTL_MOD,ptp->socket.fd,&event1);
+					(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
+					(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
+				epoll_ctl(efd,EPOLL_CTL_MOD,ptp->GetSocket().fd,&event1);
 			}
 
 			taskq.pop();

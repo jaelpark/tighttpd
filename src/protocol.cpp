@@ -17,10 +17,6 @@ StreamProtocol::~StreamProtocol(){
 	//
 }
 
-StreamProtocol::STATE StreamProtocol::SocketStatus(size_t r) const{
-	return ((r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || r == 0)?STATE_CLOSED:STATE_PENDING;
-}
-
 ClientProtocol::ClientProtocol(Socket::ClientSocket _socket, uint _sflags) : socket(_socket), sflags(_sflags){
 	//
 }
@@ -52,9 +48,8 @@ bool StreamProtocolHTTPrequest::Read(){
 	char buffer1[4096];
 	size_t len = socket.Recv(buffer1,sizeof(buffer1));
 
-	STATE s = SocketStatus(len);
-	if(s != STATE_PENDING){
-		state = s; //some error occurred
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		state = STATE_CLOSED; //Some error occurred or socket was closed
 		return true;
 	}
 
@@ -65,7 +60,8 @@ bool StreamProtocolHTTPrequest::Read(){
 	}
 
 	buffer.insert(buffer.end(),buffer1,buffer1+len);
-	if(strstr(buffer1,"\r\n\r\n")){ //Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
+	//Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
+	if(strstr(buffer1,"\r\n\r\n")){
 		state = STATE_SUCCESS;
 		return true;
 	}
@@ -101,11 +97,9 @@ bool StreamProtocolHTTPresponse::Write(){
 		spresstr(buffer.begin(),buffer.end());
 	size_t res = spresstr.size();
 	size_t len = socket.Send(spresstr.c_str(),res);
-	printf("--------------\n%s\n--------------\n",spresstr.c_str());
 
-	STATE s = SocketStatus(len);
-	if(s != STATE_PENDING){
-		state = s;
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		state = STATE_CLOSED;
 		return true;
 	}
 
@@ -173,9 +167,8 @@ bool StreamProtocolData::Write(){
 	size_t res = spresstr.size();
 	size_t len = socket.Send(spresstr.c_str(),res);
 
-	STATE s = SocketStatus(len);
-	if(s != STATE_PENDING){
-		state = s;
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		state = STATE_CLOSED;
 		return true;
 	}
 
@@ -197,7 +190,7 @@ void StreamProtocolData::Reset(){
 	buffer.clear();
 }
 
-void StreamProtocolData::Put(const char *pdata, size_t datal){
+void StreamProtocolData::Append(const char *pdata, size_t datal){
 	buffer.insert(buffer.end(),pdata,pdata+datal);
 }
 
@@ -228,7 +221,7 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			return POLL_CLOSE;
 
 		const char test[] = "Some content\r\n";
-		spdata.Put(test,strlen(test));
+		spdata.Append(test,strlen(test));
 
 		psp = &spdata;
 		state = STATE_SEND_DATA;
@@ -238,7 +231,6 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 	}else
 	if(state == STATE_SEND_DATA){
 		//
-		printf("content sent\n");
 		return POLL_CLOSE;
 	}
 
@@ -316,7 +308,7 @@ void ClientProtocolHTTP::Run(){
 		std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>>
 			requri = request.substr(ru,rl-ru);
 
-		printf("|%s|\n",requri.c_str());
+		printf("%s|\n",requri.c_str());
 		//if keep-alive: spreq.Reset();
 
 		//Get the file size or prepare StreamProtocolData and determine its final length.
@@ -327,8 +319,7 @@ void ClientProtocolHTTP::Run(){
 		spres.Finalize();
 
 		if(method == METHOD_POST){
-			//something
-			//psp = ??
+			psp = &spdata;
 			state = STATE_RECV_DATA;
 			//
 			sflags = PROTOCOL_RECV; //re-enable EPOLLIN
