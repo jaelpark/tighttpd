@@ -350,29 +350,24 @@ void ClientProtocolHTTP::Run(){
 				throw(0);
 			}
 
-			size_t ru = request.find('/',ml[method]);
-			if(ru == std::string::npos || request.find_first_not_of(" ",ml[method]) < ru){
-				//TODO: support for Absolute-URI
+			size_t ru = request.find_first_not_of(" ",ml[method]);
+			if(ru == std::string::npos || request[ru] != '/'){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
 				spres.Finalize();
 				throw(0);
 			}
-
 			size_t rl = request.find(' ',ru+1);
 			if(rl == std::string::npos){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
 				spres.Finalize();
 				throw(0);
 			}
-
-			size_t hv = request.find("HTTP/1.1",rl+1);
-			if(hv == std::string::npos || request.find_first_not_of(" ",rl+1) < hv){
-				//HTTP 400 or 505
+			size_t hv = request.find_first_not_of(" ",rl+1);
+			if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
 				spres.Finalize();
 				throw(0);
 			}
-
 			tbb_string requri = request.substr(ru,rl-ru);
 
 			//parse the relevant headers
