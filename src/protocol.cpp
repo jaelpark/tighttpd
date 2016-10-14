@@ -418,6 +418,8 @@ void ClientProtocolHTTP::Run(){
 			spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
 			spres.AddHeader("Connection","close");
 
+			//TODO: Python config determines the mimetype? text/html in case of directory
+
 			//in case of preprocessor, prepare another StreamProtocol
 
 			//if keep-alive: spreq.Reset();
@@ -455,6 +457,29 @@ void ClientProtocolHTTP::Run(){
 		//state = STATE_SEND_RESPONSE;
 		//sflags = PROTOCOL_SEND;
 	}*/
+}
+
+PyObject * ClientProtocolHTTP::Py_get(PyObject *pself, PyObject *pargs){
+	PyObject *pstr;
+	PyArg_ParseTuple(pargs,"O",&pstr);
+
+	const char *pn = PyUnicode_AsUTF8(pstr);
+	printf("----%s\n",pn);
+
+	return Py_BuildValue("i",8080);
+}
+
+void ClientProtocolHTTP::AppendModule(PyObject *pmod){
+	static PyMethodDef ghttpmeth[] = {
+		{"get",Py_get,METH_VARARGS,"doc"},
+		{0,0,0,0}
+	};
+
+	static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,"http","doc",-1,ghttpmeth,0,0,0,0};
+
+	PyObject *psub = PyModule_Create(&ghttpmod);
+	PyModule_AddObject(psub,"test",PyLong_FromLong(1000));
+	PyModule_AddObject(pmod,"http",psub);
 }
 
 }

@@ -148,6 +148,10 @@ protected:
 		CONTENT_DATA,
 		CONTENT_FILE
 	} content;
+	
+public:
+	static void AppendModule(PyObject *);
+	static PyObject * Py_get(PyObject *, PyObject *);
 };
 
 }

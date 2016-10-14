@@ -5,6 +5,7 @@
 #include <string.h> //strerror etc.
 
 #include <tbb/tbb.h>
+#include <python3.5m/Python.h>
 
 typedef unsigned int uint;
 

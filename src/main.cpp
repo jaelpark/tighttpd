@@ -10,13 +10,32 @@
 
 #include <sys/epoll.h>
 
-#include <tbb/flow_graph.h>
+//#include <tbb/flow_graph.h>
 
 int main(int argc, const char **pargv){
 	signal(SIGINT,[](int s)->void{
 		DebugPrintf("Received SIGINT\n");
+
+		Py_Finalize();
 		exit(0);
 	});
+
+	wchar_t warg[1024];
+	mbtowc(warg,pargv[0],sizeof(warg)/sizeof(warg[0]));
+	Py_SetProgramName(warg);
+
+	PyImport_AppendInittab("tighttpd",[]()->PyObject *{
+		static struct PyModuleDef tld = {PyModuleDef_HEAD_INIT,"tighttpd","doc",-1,0,0,0,0,0};
+		return PyModule_Create(&tld);
+	});
+
+	Py_Initialize();
+
+	PyObject *pmod = PyImport_AddModule("tighttpd");
+	Protocol::ClientProtocolHTTP::AppendModule(pmod);
+	//
+	//
+	//PyRun_SimpleString("import tighttpd\nprint(tighttpd.http.get('PORT'));\n");
 
 	const char *pport = argc > 1?pargv[1]:"8080";
 
@@ -39,6 +58,9 @@ int main(int argc, const char **pargv){
 
 	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive work
 	for(;;){
+		//Run() parallel queue
+		//serial node for python execution?
+		//also, final epoll_ctl must be serial and somehow synchronized with the loop below (spin mutex for each protocol class?)
 		//TODO: if work queue is empty, block indefinitely (-1). Otherwise return immediately (0).
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
 			if(events[i].data.ptr == &server){
@@ -106,6 +128,8 @@ int main(int argc, const char **pargv){
 				}
 			}
 		}
+
+		//wait for parallel queue
 
 		for(; !taskq.empty();){
 			Protocol::ClientProtocol *ptp = taskq.front();
