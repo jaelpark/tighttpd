@@ -121,6 +121,7 @@ void StreamProtocolHTTPresponse::Reset(){
 void StreamProtocolHTTPresponse::Initialize(STATUS status){
 	static const char *pstatstr[] = {
 		"200 OK",
+		"303 See Other",
 		"304 Not Found",
 		"400 Bad Request",
 		"403 Forbidden",
@@ -421,11 +422,11 @@ void ClientProtocolHTTP::Run(){
 			Py_DECREF(pycfg);
 
 			pycfg = PyObject_GetAttrString(psub,"index");
-			bool index = PyBool_Check(pycfg);
+			bool index = PyObject_IsTrue(pycfg);
 			Py_DECREF(pycfg);
 
 			pycfg = PyObject_GetAttrString(psub,"listing");
-			bool listing = PyBool_Check(pycfg);
+			bool listing = PyObject_IsTrue(pycfg);
 			Py_DECREF(pycfg);
 
 			pycfg = PyObject_GetAttrString(psub,"mimetype");
@@ -442,6 +443,15 @@ void ClientProtocolHTTP::Run(){
 			}
 
 			if(S_ISDIR(statbuf.st_mode)){
+				//Forward directory requests with /[uri] to /[uri]/
+				if(requri.back() != '/'){
+					requri += '/';
+					spres.Initialize(StreamProtocolHTTPresponse::STATUS_303);
+					spres.FormatHeader("Location",requri.c_str());
+					spres.Finalize();
+					throw(0);
+				}
+
 				if(index){
 					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.txt"};
 					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
@@ -453,13 +463,20 @@ void ClientProtocolHTTP::Run(){
 					}
 				}
 
-				/*if(S_ISDIR(statbuf.st_mode) && listing){
+				if(S_ISDIR(statbuf.st_mode)){
 					//list the contents of this dir, if enabled
-				}*/
+					if(listing){
+						//
+					}else{
+						spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
+						spres.Finalize();
+						throw(0);
+					}
+				}
 			}
+
 			if(method != METHOD_HEAD){
-				//if(!spfile.Open(path)){
-				if(S_ISDIR(statbuf.st_mode) || !spfile.Open(path)){
+				if(!spfile.Open(path)){
 					spres.Initialize(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was verified to exist
 					spres.Finalize();
 					throw(0);
@@ -473,10 +490,10 @@ void ClientProtocolHTTP::Run(){
 
 			spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
 			spres.AddHeader("Connection","close");
+			spres.AddHeader("Content-Type",mimetype.c_str());
 
-			//TODO: Python config determines the mimetype? text/html in case of directory
-
-			//in case of preprocessor, prepare another StreamProtocol
+			//In case of preprocessor, prepare another StreamProtocol.
+			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
 
 			//if keep-alive: spreq.Reset();
 

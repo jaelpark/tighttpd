@@ -77,6 +77,7 @@ public:
 	//
 	enum STATUS{
 		STATUS_200, //OK
+		STATUS_303, //see other
 		STATUS_304, //not modified,
 		STATUS_400, //bad request
 		STATUS_403, //forbidden
@@ -90,6 +91,7 @@ public:
 	void AddHeader(const char *, const char *);
 	void FormatHeader(const char *, const char *, ...);
 	void Finalize();
+	//void Build(); //combine response and headers
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };
 
