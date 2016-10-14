@@ -11,8 +11,6 @@
 
 namespace Protocol{
 
-typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
-
 StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket), state(STATE_PENDING){
 	//
 }
@@ -334,6 +332,7 @@ void ClientProtocolHTTP::Run(){
 			size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
 			tbb_string request = spreqstr.substr(0,lf);
 
+			//parse the request line ----------------------------------------------------------------------------
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
 			static const uint ml[] = {5,4,5};
 			if(request.compare(0,ml[0],"HEAD ") == 0)
@@ -370,29 +369,42 @@ void ClientProtocolHTTP::Run(){
 			}
 			tbb_string requri = request.substr(ru,rl-ru);
 
-			//parse the relevant headers
-			size_t hs = spreqstr.find("\r\nHost: ",lf);
-			if(hs == std::string::npos){
+			//parse the relevant headers ------------------------------------------------------------------------
+			tbb_string hcnt;
+			if(!ParseHeader(lf,spreqstr,"Host",hcnt)){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
 				spres.Finalize();
 				throw(0);
 			}
-			size_t he = spreqstr.find("\r\n",hs+8);
-			size_t hc = spreqstr.find_first_not_of(" ",hs+8);
-			if(he <= hc){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-				spres.Finalize();
-				throw(0);
-			}
-			tbb_string host = spreqstr.substr(hc,he-hc);
 
-			//config
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
 
+			if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
+				connection = CONNECTION_KEEPALIVE;
+			else connection = CONNECTION_CLOSE;
+
 			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri.c_str()));
-			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(host.c_str()));
+			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(hcnt.c_str()));
 			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
+			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
+
+			if(ParseHeader(lf,spreqstr,"User-Agent",hcnt))
+				PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(hcnt.c_str()));
+			if(ParseHeader(lf,spreqstr,"Accept",hcnt))
+				PyObject_SetAttrString(psub,"accept",PyUnicode_FromString(hcnt.c_str()));
+			if(ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt))
+				PyObject_SetAttrString(psub,"accept_encoding",PyUnicode_FromString(hcnt.c_str()));
+			if(ParseHeader(lf,spreqstr,"Accept-Language",hcnt))
+				PyObject_SetAttrString(psub,"accept_language",PyUnicode_FromString(hcnt.c_str()));
+
+			//prepare the default options
+			PyObject_SetAttrString(psub,"root",PyUnicode_FromString(".")); //current work dir
+			PyObject_SetAttrString(psub,"index",PyBool_FromLong(true)); //enable index pages
+			PyObject_SetAttrString(psub,"listing",PyBool_FromLong(false)); //disable directory listing by default
+			PyObject_SetAttrString(psub,"mimetype",PyUnicode_FromString("application/octet-stream")); //let the config determine this
+			//PyObject_SetAttrString(psub,"index",PyUnicode_FromString("index.html"));
+
 			if(!PyEval_EvalCode(pycode,pyglb,0)){
 				PyErr_Print();
 
@@ -401,32 +413,50 @@ void ClientProtocolHTTP::Run(){
 				throw(0);
 			}
 
-			tbb_string locald = tbb_string(".")+requri;
+			//retrieve the configured options
+			PyObject *pycfg;
+
+			pycfg = PyObject_GetAttrString(psub,"root");
+			tbb_string locald = tbb_string(PyUnicode_AsUTF8(pycfg))+requri; //TODO: check the object type
+			Py_DECREF(pycfg);
+
+			pycfg = PyObject_GetAttrString(psub,"index");
+			bool index = PyBool_Check(pycfg);
+			Py_DECREF(pycfg);
+
+			pycfg = PyObject_GetAttrString(psub,"listing");
+			bool listing = PyBool_Check(pycfg);
+			Py_DECREF(pycfg);
+
+			pycfg = PyObject_GetAttrString(psub,"mimetype");
+			tbb_string mimetype = tbb_string(PyUnicode_AsUTF8(pycfg));
+			Py_DECREF(pycfg);
 
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
-			//printf("%s|\n",path); //debug
 
 			struct stat statbuf;
 			if(stat(path,&statbuf) == -1){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
 				spres.Finalize();
-				//TODO: set psp to 404 file.
-				throw(0);
+				throw(0); //TODO: set psp to 404 file.
 			}
 
-			/*int statr, d = 0;
-			do{
-				tbb_string t = locald+index[d];
-				statr = stat(t.c_str(),&statbuf);
-			}while(statr == -1 || S_ISDIR(statbuf.st_mode));*/
+			if(S_ISDIR(statbuf.st_mode)){
+				if(index){
+					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.txt"};
+					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
+						tbb_string page = locald+pindex[i];
+						if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode)){
+							locald = page;
+							break;
+						}
+					}
+				}
 
-
-			/*if(S_ISDIR(statbuf.st_mode)){
-				//TODO: locate the index-file if uri points to a directory
-				//alternative list directory if enabled
-				//currently this just gives http 500
-			}*/
-
+				/*if(S_ISDIR(statbuf.st_mode) && listing){
+					//list the contents of this dir, if enabled
+				}*/
+			}
 			if(method != METHOD_HEAD){
 				//if(!spfile.Open(path)){
 				if(S_ISDIR(statbuf.st_mode) || !spfile.Open(path)){
@@ -485,6 +515,19 @@ void ClientProtocolHTTP::Run(){
 	}*/
 }
 
+bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){
+	size_t hs = spreqstr.find("\r\n"+header+": ",lf);
+	if(hs == std::string::npos)
+		return false;
+	size_t hl = hs+header.length()+4;
+	size_t he = spreqstr.find("\r\n",hl);
+	size_t hc = spreqstr.find_first_not_of(" ",hl);
+	if(he <= hc)
+		return false;
+	content = spreqstr.substr(hc,he-hc);
+	return true;
+}
+
 bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
 	static const char *psubn = "http";
 	//static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,ghttpmeth,0,0,0,0};
@@ -494,6 +537,9 @@ bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
 	PyModule_AddObject(pmod,psubn,psub);
 
 	PyModule_AddIntConstant(psub,"port",8080);
+
+	PyModule_AddIntConstant(psub,"CONNECTION_CLOSE",CONNECTION_CLOSE);
+	PyModule_AddIntConstant(psub,"CONNECTION_KEEPALIVE",CONNECTION_KEEPALIVE);
 	//PyModule_AddStringConstant
 
 	pyglb = PyDict_New();

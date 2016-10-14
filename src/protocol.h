@@ -3,6 +3,8 @@
 
 namespace Protocol{
 
+typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
+
 #define PROTOCOL_RECV 0x1
 #define PROTOCOL_SEND 0x2
 #define PROTOCOL_ACCEPT 0x4
@@ -127,6 +129,7 @@ public:
 	POLL Poll(uint);
 	void Run();
 protected:
+	bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
 	StreamProtocolData spdata;
@@ -145,11 +148,17 @@ protected:
 		METHOD_POST
 	} method;
 
+	enum CONNECTION{
+		CONNECTION_CLOSE,
+		CONNECTION_KEEPALIVE
+	} connection;
+
 	enum CONTENT{
 		CONTENT_NONE,
 		CONTENT_DATA,
 		CONTENT_FILE
 	} content;
+
 
 public:
 	static bool InitConfigModule(PyObject *, const char *);
