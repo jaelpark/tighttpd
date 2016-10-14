@@ -44,6 +44,8 @@ public:
 	virtual POLL Poll(uint) = 0;
 	//Run() method for parallel execution
 	virtual void Run() = 0;
+	//virtual void RunConfig() = 0;
+	//virtual void RunFinal() = 0;
 	//
 protected:
 	StreamProtocol *psp;
@@ -148,10 +150,15 @@ protected:
 		CONTENT_DATA,
 		CONTENT_FILE
 	} content;
-	
+
 public:
-	static void AppendModule(PyObject *);
-	static PyObject * Py_get(PyObject *, PyObject *);
+	static bool InitConfigModule(PyObject *, const char *);
+	//static PyObject * Py_get(PyObject *, PyObject *);
+	static PyObject *psub;
+	static PyObject *pycode;
+	static PyObject *pyglb;
+	//
+	//static PyObject *pyaddr;
 };
 
 }

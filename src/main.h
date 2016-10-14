@@ -9,6 +9,20 @@
 
 typedef unsigned int uint;
 
+namespace Config{
+
+class File{
+public:
+	File();
+	~File();
+	const char * Read(const char *);
+	void Free();
+private:
+	char *pdata;
+};
+
+}
+
 void DebugPrintf(const char *, ...);
 
 #endif

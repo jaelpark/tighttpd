@@ -12,13 +12,50 @@
 
 //#include <tbb/flow_graph.h>
 
-int main(int argc, const char **pargv){
-	signal(SIGINT,[](int s)->void{
-		DebugPrintf("Received SIGINT\n");
+namespace Config{
 
-		Py_Finalize();
-		exit(0);
-	});
+File::File(){
+	//
+}
+
+File::~File(){
+	//
+}
+
+const char * File::Read(const char *psrc){
+	FILE *pf = fopen(psrc,"rb");
+	if(!pf)
+		return 0;
+	fseek(pf,0,SEEK_END);
+	size_t len = ftell(pf);
+	fseek(pf,0,SEEK_SET);
+
+	pdata = new char[len+1];
+	fread(pdata,1,len,pf);
+	pdata[len] = 0;
+
+	fclose(pf);
+	return pdata;
+}
+
+void File::Free(){
+	delete pdata;
+}
+
+}
+
+int main(int argc, const char **pargv){
+	if(argc < 3){
+		DebugPrintf("Usage: tighttpd <config.py> <port>\n");
+		return -1;
+	}
+
+	Config::File cfg;
+	const char *pcfgsrc = cfg.Read(pargv[1]);
+	if(!pcfgsrc){
+		DebugPrintf("Error: unable to open %s\n",pargv[1]);
+		return -1;
+	}
 
 	wchar_t warg[1024];
 	mbtowc(warg,pargv[0],sizeof(warg)/sizeof(warg[0]));
@@ -32,15 +69,22 @@ int main(int argc, const char **pargv){
 	Py_Initialize();
 
 	PyObject *pmod = PyImport_AddModule("tighttpd");
-	Protocol::ClientProtocolHTTP::AppendModule(pmod);
-	//
-	//
-	//PyRun_SimpleString("import tighttpd\nprint(tighttpd.http.get('PORT'));\n");
+	if(!Protocol::ClientProtocolHTTP::InitConfigModule(pmod,pcfgsrc)){
+		Py_Finalize();
+		return -1;
+	}
 
-	const char *pport = argc > 1?pargv[1]:"8080";
+	cfg.Free();
+
+	signal(SIGINT,[](int s)->void{
+		DebugPrintf("Received SIGINT\n");
+
+		Py_Finalize();
+		exit(0);
+	});
 
 	Socket::ServerSocket server(0);
-	int sfd = server.Listen(pport);
+	int sfd = server.Listen(pargv[2]);
 
 	//Create the epoll socket monitoring instance
 	//-> man epoll

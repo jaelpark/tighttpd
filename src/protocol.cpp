@@ -332,7 +332,6 @@ void ClientProtocolHTTP::Run(){
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
 			size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
-
 			tbb_string request = spreqstr.substr(0,lf);
 
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
@@ -352,22 +351,22 @@ void ClientProtocolHTTP::Run(){
 			}
 
 			size_t ru = request.find('/',ml[method]);
-			if(ru == -1 || request.find_first_not_of(" ",ml[method]) < ru){
-				//TODO: support Absolute-URI
+			if(ru == std::string::npos || request.find_first_not_of(" ",ml[method]) < ru){
+				//TODO: support for Absolute-URI
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
 				spres.Finalize();
 				throw(0);
 			}
 
 			size_t rl = request.find(' ',ru+1);
-			if(rl == -1){
+			if(rl == std::string::npos){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
 				spres.Finalize();
 				throw(0);
 			}
 
 			size_t hv = request.find("HTTP/1.1",rl+1);
-			if(hv == -1 || request.find_first_not_of(" ",rl+1) < hv){
+			if(hv == std::string::npos || request.find_first_not_of(" ",rl+1) < hv){
 				//HTTP 400 or 505
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
 				spres.Finalize();
@@ -375,6 +374,38 @@ void ClientProtocolHTTP::Run(){
 			}
 
 			tbb_string requri = request.substr(ru,rl-ru);
+
+			//parse the relevant headers
+			size_t hs = spreqstr.find("\r\nHost: ",lf);
+			if(hs == std::string::npos){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
+				spres.Finalize();
+				throw(0);
+			}
+			size_t he = spreqstr.find("\r\n",hs+8);
+			size_t hc = spreqstr.find_first_not_of(" ",hs+8);
+			if(he <= hc){
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
+				spres.Finalize();
+				throw(0);
+			}
+			tbb_string host = spreqstr.substr(hc,he-hc);
+
+			//config
+			char address[256] = "0.0.0.0";
+			socket.Identify(address,sizeof(address));
+
+			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri.c_str()));
+			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(host.c_str()));
+			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
+			if(!PyEval_EvalCode(pycode,pyglb,0)){
+				PyErr_Print();
+
+				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
+				spres.Finalize();
+				throw(0);
+			}
+
 			tbb_string locald = tbb_string(".")+requri;
 
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
@@ -459,27 +490,31 @@ void ClientProtocolHTTP::Run(){
 	}*/
 }
 
-PyObject * ClientProtocolHTTP::Py_get(PyObject *pself, PyObject *pargs){
-	PyObject *pstr;
-	PyArg_ParseTuple(pargs,"O",&pstr);
+bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
+	static const char *psubn = "http";
+	//static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,ghttpmeth,0,0,0,0};
+	static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,0,0,0,0,0};
 
-	const char *pn = PyUnicode_AsUTF8(pstr);
-	printf("----%s\n",pn);
+	psub = PyModule_Create(&ghttpmod);
+	PyModule_AddObject(pmod,psubn,psub);
 
-	return Py_BuildValue("i",8080);
+	PyModule_AddIntConstant(psub,"port",8080);
+	//PyModule_AddStringConstant
+
+	pyglb = PyDict_New();
+	PyDict_SetItemString(pyglb,"__builtins__",PyEval_GetBuiltins());
+
+	pycode = Py_CompileString(pcfgsrc,"config.py",Py_file_input);
+	if(!pycode){
+		PyErr_Print();
+		return false;
+	}
+
+	return true;
 }
 
-void ClientProtocolHTTP::AppendModule(PyObject *pmod){
-	static PyMethodDef ghttpmeth[] = {
-		{"get",Py_get,METH_VARARGS,"doc"},
-		{0,0,0,0}
-	};
-
-	static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,"http","doc",-1,ghttpmeth,0,0,0,0};
-
-	PyObject *psub = PyModule_Create(&ghttpmod);
-	PyModule_AddObject(psub,"test",PyLong_FromLong(1000));
-	PyModule_AddObject(pmod,"http",psub);
-}
+PyObject * ClientProtocolHTTP::psub = 0;
+PyObject * ClientProtocolHTTP::pycode = 0;
+PyObject * ClientProtocolHTTP::pyglb = 0;
 
 }
