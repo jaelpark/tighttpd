@@ -5,6 +5,8 @@
 #include <netdb.h>
 #include <fcntl.h>
 #include <unistd.h>
+//#include <netinet/in.h>
+//#include <arpa/inet.h>
 
 namespace Socket{
 
@@ -104,6 +106,12 @@ size_t ClientSocket::Send(const void *pbuf, size_t bufl) const{
 
 void ClientSocket::Close() const{
 	close(fd);
+}
+
+bool ClientSocket::Identify(char *paddr, size_t addrl) const{
+	struct sockaddr c;
+	socklen_t len = sizeof(c);
+	return getnameinfo((struct sockaddr *)&c,len,paddr,addrl,0,0,NI_NUMERICHOST) == 0;
 }
 
 }
