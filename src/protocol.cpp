@@ -9,6 +9,9 @@
 #include <tbb/scalable_allocator.h>
 #include <tbb/cache_aligned_allocator.h>
 
+#include <string>
+#include <sstream>
+
 namespace Protocol{
 
 StreamProtocol::StreamProtocol(Socket::ClientSocket _socket) : socket(_socket), state(STATE_PENDING){
@@ -264,6 +267,7 @@ ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientPro
 
 	method = METHOD_GET;
 	content = CONTENT_NONE;
+	connection = CONNECTION_CLOSE;
 }
 
 ClientProtocolHTTP::~ClientProtocolHTTP(){
@@ -313,12 +317,10 @@ void ClientProtocolHTTP::Run(){
 		try{
 			if(spreq.state == StreamProtocol::STATE_CORRUPTED){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
-				spres.Finalize();
 				throw(0);
 			}else
 			if(spreq.state == StreamProtocol::STATE_ERROR){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
-				spres.Finalize();
 				throw(0);
 			}else
 			if(spreq.state == StreamProtocol::STATE_CLOSED){
@@ -346,35 +348,60 @@ void ClientProtocolHTTP::Run(){
 				method = METHOD_POST;
 			else{
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_501);
-				spres.Finalize();
 				throw(0);
 			}
 
 			size_t ru = request.find_first_not_of(" ",ml[method]);
 			if(ru == std::string::npos || request[ru] != '/'){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-				spres.Finalize();
 				throw(0);
 			}
 			size_t rl = request.find(' ',ru+1);
 			if(rl == std::string::npos){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-				spres.Finalize();
 				throw(0);
 			}
 			size_t hv = request.find_first_not_of(" ",rl+1);
 			if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
-				spres.Finalize();
 				throw(0);
 			}
-			tbb_string requri = request.substr(ru,rl-ru);
+			tbb_string requri_enc = request.substr(ru,rl-ru);
+			size_t enclen = requri_enc.size();
+
+			//https://tools.ietf.org/html/rfc3986#section-3 (syntax components)
+			size_t qv = requri_enc.find('?',0); //find the beginning of the query part
+			if(qv == std::string::npos)
+				qv = enclen;
+
+			//std::istringstream iss(resource);
+			/*tbb_istringstream iss(requri_enc);
+			for(tbb_string tok; getline(iss,tok,'%');){
+				//resource += tok;
+				printf("--%s\n",tok.c_str());
+			}*/
+
+			//basic uri decoding
+			tbb_string resource = "/";
+			resource.reserve(qv);
+			for(uint i = 1; i < qv; ++i){
+				if(requri_enc[i] == '%'){
+					if(i >= qv-2)
+						break;
+					tbb_string enc = requri_enc.substr(i+1,2);
+					ulong c = strtoul(enc.c_str(),0,16);
+					if(c != 0 && c < 256)
+						resource += (char)c;
+					i += 2;
+				}else resource += requri_enc[i];
+			}
+
+			//TODO: decode the query (after &-tokenizing)?
 
 			//parse the relevant headers ------------------------------------------------------------------------
 			tbb_string hcnt;
 			if(!ParseHeader(lf,spreqstr,"Host",hcnt)){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
-				spres.Finalize();
 				throw(0);
 			}
 
@@ -385,7 +412,8 @@ void ClientProtocolHTTP::Run(){
 				connection = CONNECTION_KEEPALIVE;
 			else connection = CONNECTION_CLOSE;
 
-			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri.c_str()));
+			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
+			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
 			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(hcnt.c_str()));
 			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
 			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
@@ -410,7 +438,6 @@ void ClientProtocolHTTP::Run(){
 				PyErr_Print();
 
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
-				spres.Finalize();
 				throw(0);
 			}
 
@@ -418,7 +445,7 @@ void ClientProtocolHTTP::Run(){
 			PyObject *pycfg;
 
 			pycfg = PyObject_GetAttrString(psub,"root");
-			tbb_string locald = tbb_string(PyUnicode_AsUTF8(pycfg))+requri; //TODO: check the object type
+			tbb_string locald = tbb_string(PyUnicode_AsUTF8(pycfg))+resource; //TODO: check the object type
 			Py_DECREF(pycfg);
 
 			pycfg = PyObject_GetAttrString(psub,"index");
@@ -434,26 +461,25 @@ void ClientProtocolHTTP::Run(){
 			Py_DECREF(pycfg);
 
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
+			//https://tools.ietf.org/html/rfc3986#section-5.2.4 (dot segments)
 
 			struct stat statbuf;
 			if(stat(path,&statbuf) == -1){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
-				spres.Finalize();
 				throw(0); //TODO: set psp to 404 file.
 			}
 
 			if(S_ISDIR(statbuf.st_mode)){
 				//Forward directory requests with /[uri] to /[uri]/
-				if(requri.back() != '/'){
-					requri += '/';
+				if(requri_enc.back() != '/'){
+					requri_enc += '/';
 					spres.Initialize(StreamProtocolHTTPresponse::STATUS_303);
-					spres.FormatHeader("Location",requri.c_str());
-					spres.Finalize();
+					spres.FormatHeader("Location",requri_enc.c_str());
 					throw(0);
 				}
 
 				if(index){
-					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.txt"};
+					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php"};
 					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
 						tbb_string page = locald+pindex[i];
 						if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode)){
@@ -469,7 +495,6 @@ void ClientProtocolHTTP::Run(){
 						//
 					}else{
 						spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
-						spres.Finalize();
 						throw(0);
 					}
 				}
@@ -478,7 +503,6 @@ void ClientProtocolHTTP::Run(){
 			if(method != METHOD_HEAD){
 				if(!spfile.Open(path)){
 					spres.Initialize(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was verified to exist
-					spres.Finalize();
 					throw(0);
 				}
 
@@ -505,16 +529,18 @@ void ClientProtocolHTTP::Run(){
 			if(method == METHOD_POST){
 				psp = &spdata;
 				state = STATE_RECV_DATA;
-				//
 				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 			}else{
 				psp = &spres;
 				state = STATE_SEND_RESPONSE;
-				//
 				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
 			}
 
 		}catch(...){
+
+			spres.AddHeader("Connection","close");
+			spres.Finalize();
+
 			//prepare the fail response
 			{
 				psp = &spres;
