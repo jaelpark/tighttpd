@@ -22,7 +22,7 @@ public:
 		STATE_SUCCESS, //required transfer complete
 		STATE_CLOSED, //socket closed by remote
 		STATE_CORRUPTED, //protocol violation
-		STATE_ERROR //some internal error
+		//STATE_ERROR //some internal error
 	};
 	Socket::ClientSocket socket;
 	STATE state;
@@ -39,14 +39,14 @@ public:
 	inline Socket::ClientSocket GetSocket() const{return socket;}
 	inline uint GetFlags() const{return sflags;}
 	enum POLL{
-		POLL_SKIP,
-		POLL_RUN,
-		POLL_CLOSE
+		POLL_SKIP, //no special operation
+		POLL_RUN, //parallel offload
+		POLL_CLOSE //close the socket, remove the client
 	};
 	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
 	virtual POLL Poll(uint) = 0;
 	//Run() method for parallel execution
-	virtual void Run() = 0;
+	virtual bool Run() = 0;
 	//virtual void RunConfig() = 0;
 	//virtual void RunFinal() = 0;
 	//
@@ -130,8 +130,10 @@ public:
 	~ClientProtocolHTTP();
 	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
-	void Run();
+	bool Run();
 protected:
+	void Reset();
+	void Clear();
 	bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
@@ -142,7 +144,7 @@ protected:
 		STATE_RECV_REQUEST,
 		STATE_RECV_DATA,
 		STATE_SEND_RESPONSE,
-		STATE_SEND_DATA
+		STATE_SEND_DATA,
 	} state;
 
 	enum METHOD{

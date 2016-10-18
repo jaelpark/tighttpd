@@ -179,8 +179,10 @@ int main(int argc, const char **pargv){
 			Protocol::ClientProtocol *ptp = taskq.front();
 			uint sflags = ptp->GetFlags();
 
-			ptp->Run();
-
+			if(!ptp->Run()){
+				epoll_ctl(efd,EPOLL_CTL_DEL,ptp->GetSocket().fd,0);
+				delete ptp;
+			}else
 			if(sflags != ptp->GetFlags()){
 				event1.data.ptr = ptp;
 				event1.events =

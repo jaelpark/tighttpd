@@ -262,12 +262,7 @@ void StreamProtocolData::Append(const char *pdata, size_t datal){
 }
 
 ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket){
-	psp = &spreq;
-	state = STATE_RECV_REQUEST;
-
-	method = METHOD_GET;
-	content = CONTENT_NONE;
-	connection = CONNECTION_CLOSE;
+	Reset();
 }
 
 ClientProtocolHTTP::~ClientProtocolHTTP(){
@@ -277,21 +272,24 @@ ClientProtocolHTTP::~ClientProtocolHTTP(){
 
 ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 	//main HTTP state machine
-	if(sflag1 == PROTOCOL_ACCEPT){
-		//Nothing to do, all the relevant flags have already been set in class constructor. Awaiting for request.
+	if(sflag1 == PROTOCOL_ACCEPT)
 		return POLL_SKIP;
-	}
 
 	//no need to check sflags, since only either PROTOCOL_SEND or RECV is enabled according to current state
 	if(state == STATE_RECV_REQUEST || state == STATE_RECV_DATA){
 		//sflag1 == PROTOCOL_RECV
 		sflags = 0; //do not expect traffic until request has been processed
-		return POLL_RUN; //handle the request in Run()
+		return POLL_RUN; //handle the request in parallel Run()
 
 	}else
 	if(state == STATE_SEND_RESPONSE){
-		if(content == CONTENT_NONE)
-			return POLL_CLOSE;
+		if(content == CONTENT_NONE){
+			Clear();
+			if(connection == CONNECTION_KEEPALIVE){
+				Reset();
+				return POLL_SKIP;
+			}else return POLL_CLOSE;
+		}
 
 		const char test[] = "Some content\r\n";
 		spdata.Append(test,strlen(test));
@@ -304,14 +302,22 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 		return POLL_SKIP;
 	}else
 	if(state == STATE_SEND_DATA){
-		psp->Reset();
-		return POLL_CLOSE;
+		{
+			Clear();
+			if(connection == CONNECTION_KEEPALIVE){
+				Reset();
+				return POLL_SKIP;
+			}else return POLL_CLOSE;
+		}
+
+		//return POLL_SKIP;
 	}
 
+	//default queries (ACCEPT)
 	return POLL_SKIP;
 }
 
-void ClientProtocolHTTP::Run(){
+bool ClientProtocolHTTP::Run(){
 	//
 	if(state == STATE_RECV_REQUEST){
 		try{
@@ -319,14 +325,8 @@ void ClientProtocolHTTP::Run(){
 				spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
 				throw(0);
 			}else
-			if(spreq.state == StreamProtocol::STATE_ERROR){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
-				throw(0);
-			}else
-			if(spreq.state == StreamProtocol::STATE_CLOSED){
-				//remove the client
-				return;
-			}
+			if(spreq.state == StreamProtocol::STATE_CLOSED)
+				return false;
 
 			tbb_string spreqstr(spreq.buffer.begin(),spreq.buffer.end());
 
@@ -408,9 +408,10 @@ void ClientProtocolHTTP::Run(){
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
 
-			if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
+			/*if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
 				connection = CONNECTION_KEEPALIVE;
-			else connection = CONNECTION_CLOSE;
+			else connection = CONNECTION_CLOSE;*/
+			connection = CONNECTION_CLOSE; //cant use KEEPALIVE until Content-Length is implemented
 
 			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
 			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
@@ -548,14 +549,37 @@ void ClientProtocolHTTP::Run(){
 				sflags = PROTOCOL_SEND;
 			}
 		}
-	}/*else
+	}else
 	if(state == STATE_RECV_DATA){
+		if(spdata.state == StreamProtocol::STATE_CLOSED)
+			return false;
 		//POST complete
 		//write it to preprocessor stdin or whatever
 
 		//state = STATE_SEND_RESPONSE;
 		//sflags = PROTOCOL_SEND;
-	}*/
+	}
+
+	return true;
+}
+
+void ClientProtocolHTTP::Reset(){
+	//Reset the client to the state of post-accept
+	psp = &spreq;
+	state = STATE_RECV_REQUEST;
+	sflags = PROTOCOL_RECV;
+
+	method = METHOD_GET;
+	content = CONTENT_NONE;
+	connection = CONNECTION_CLOSE;
+}
+
+void ClientProtocolHTTP::Clear(){
+	//Clear the buffers and close the files
+	spreq.Reset();
+	spres.Reset();
+	spdata.Reset();
+	spfile.Reset();
 }
 
 bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){
