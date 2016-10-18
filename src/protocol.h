@@ -88,10 +88,11 @@ public:
 		STATUS_501, //not implemented
 		STATUS_505, //HTTP version not supported
 	};
-	void Initialize(STATUS);
+	//void Initialize(STATUS);
+	void Generate(STATUS);
 	void AddHeader(const char *, const char *);
 	void FormatHeader(const char *, const char *, ...);
-	void Finalize();
+	//void Finalize();
 	//void Build(); //combine response and headers
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 };

@@ -121,7 +121,7 @@ void StreamProtocolHTTPresponse::Reset(){
 	buffer.clear();
 }
 
-void StreamProtocolHTTPresponse::Initialize(STATUS status){
+void StreamProtocolHTTPresponse::Generate(STATUS status){
 	static const char *pstatstr[] = {
 		"200 OK",
 		"303 See Other",
@@ -138,14 +138,17 @@ void StreamProtocolHTTPresponse::Initialize(STATUS status){
 	char buffer1[4096];
 	size_t len;
 
-	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
-	buffer.insert(buffer.end(),buffer1,buffer1+len);
-
 	time_t rt;
 	time(&rt);
 	const struct tm *pti = gmtime(&rt);
 	len = strftime(buffer1,sizeof(buffer1),"Date: %a, %d %b %Y %H:%M:%S %Z\r\n",pti); //mandatory
-	buffer.insert(buffer.end(),buffer1,buffer1+len);
+	buffer.insert(buffer.begin(),buffer1,buffer1+len);
+
+	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
+	buffer.insert(buffer.begin(),buffer1,buffer1+len);
+
+	static const char *pclrf = "\r\n";
+	buffer.insert(buffer.end(),pclrf,pclrf+2);
 }
 
 void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield){
@@ -163,11 +166,6 @@ void StreamProtocolHTTPresponse::FormatHeader(const char *pname, const char *pfm
 	va_end(args);
 
 	AddHeader(pname,buffer1);
-}
-
-void StreamProtocolHTTPresponse::Finalize(){
-	static const char *pclrf = "\r\n";
-	buffer.insert(buffer.end(),pclrf,pclrf+2);
 }
 
 StreamProtocolData::StreamProtocolData(Socket::ClientSocket _socket) : StreamProtocol(_socket){
@@ -321,10 +319,9 @@ bool ClientProtocolHTTP::Run(){
 	//
 	if(state == STATE_RECV_REQUEST){
 		try{
-			if(spreq.state == StreamProtocol::STATE_CORRUPTED){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_413); //or 400
-				throw(0);
-			}else
+			if(spreq.state == StreamProtocol::STATE_CORRUPTED)
+				throw(StreamProtocolHTTPresponse::STATUS_413); //or 400
+			else
 			if(spreq.state == StreamProtocol::STATE_CLOSED)
 				return false;
 
@@ -347,25 +344,20 @@ bool ClientProtocolHTTP::Run(){
 			if(request.compare(0,ml[2],"POST ") == 0)
 				method = METHOD_POST;
 			else{
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_501);
-				throw(0);
+				//
+				throw(StreamProtocolHTTPresponse::STATUS_501);
 			}
 
 			size_t ru = request.find_first_not_of(" ",ml[method]);
-			if(ru == std::string::npos || request[ru] != '/'){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-				throw(0);
-			}
+			if(ru == std::string::npos || request[ru] != '/')
+				throw(StreamProtocolHTTPresponse::STATUS_400);
 			size_t rl = request.find(' ',ru+1);
-			if(rl == std::string::npos){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400);
-				throw(0);
-			}
+			if(rl == std::string::npos)
+				throw(StreamProtocolHTTPresponse::STATUS_400);
 			size_t hv = request.find_first_not_of(" ",rl+1);
-			if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_505);
-				throw(0);
-			}
+			if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0)
+				throw(StreamProtocolHTTPresponse::STATUS_505);
+
 			tbb_string requri_enc = request.substr(ru,rl-ru);
 			size_t enclen = requri_enc.size();
 
@@ -400,18 +392,15 @@ bool ClientProtocolHTTP::Run(){
 
 			//parse the relevant headers ------------------------------------------------------------------------
 			tbb_string hcnt;
-			if(!ParseHeader(lf,spreqstr,"Host",hcnt)){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
-				throw(0);
-			}
+			if(!ParseHeader(lf,spreqstr,"Host",hcnt))
+				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
 
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
 
-			/*if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
+			if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
 				connection = CONNECTION_KEEPALIVE;
-			else connection = CONNECTION_CLOSE;*/
-			connection = CONNECTION_CLOSE; //cant use KEEPALIVE until Content-Length is implemented
+			else connection = CONNECTION_CLOSE;
 
 			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
 			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
@@ -438,8 +427,7 @@ bool ClientProtocolHTTP::Run(){
 			if(!PyEval_EvalCode(pycode,pyglb,0)){
 				PyErr_Print();
 
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_500);
-				throw(0);
+				throw(StreamProtocolHTTPresponse::STATUS_500);
 			}
 
 			//retrieve the configured options
@@ -465,18 +453,15 @@ bool ClientProtocolHTTP::Run(){
 			//https://tools.ietf.org/html/rfc3986#section-5.2.4 (dot segments)
 
 			struct stat statbuf;
-			if(stat(path,&statbuf) == -1){
-				spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
-				throw(0); //TODO: set psp to 404 file.
-			}
+			if(stat(path,&statbuf) == -1)
+				throw(StreamProtocolHTTPresponse::STATUS_404); //TODO: set psp to 404 file.
 
 			if(S_ISDIR(statbuf.st_mode)){
 				//Forward directory requests with /[uri] to /[uri]/
 				if(requri_enc.back() != '/'){
 					requri_enc += '/';
-					spres.Initialize(StreamProtocolHTTPresponse::STATUS_303);
 					spres.FormatHeader("Location",requri_enc.c_str());
-					throw(0);
+					throw(StreamProtocolHTTPresponse::STATUS_303);
 				}
 
 				if(index){
@@ -495,37 +480,30 @@ bool ClientProtocolHTTP::Run(){
 					if(listing){
 						//
 					}else{
-						spres.Initialize(StreamProtocolHTTPresponse::STATUS_404);
-						throw(0);
+						throw(StreamProtocolHTTPresponse::STATUS_404);
 					}
 				}
 			}
 
 			if(method != METHOD_HEAD){
-				if(!spfile.Open(path)){
-					spres.Initialize(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was verified to exist
-					throw(0);
-				}
-
-				//spres.FormatHeader("Content-Length","%u",statbuf.st_size);
-				//Last-Modified
+				if(!spfile.Open(path))
+					throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was supposed to exist
 
 				content = CONTENT_FILE;
 			}
 
-			spres.Initialize(StreamProtocolHTTPresponse::STATUS_200); //or 301
-			spres.AddHeader("Connection","close");
+			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
+			spres.FormatHeader("Content-Length","%u",statbuf.st_size);
 			spres.AddHeader("Content-Type",mimetype.c_str());
+			//Last-Modified
+
+			spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //don't finalize if the preprocessor wants to add something
 
 			//In case of preprocessor, prepare another StreamProtocol.
 			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
 
-			//if keep-alive: spreq.Reset();
-
 			//Get the file size or prepare StreamProtocolData and determine its final length.
 			//Connection: keep-alive requires Content-Length
-
-			spres.Finalize(); //don't finalize if the preprocessor wants to add something
 
 			if(method == METHOD_POST){
 				psp = &spdata;
@@ -537,10 +515,12 @@ bool ClientProtocolHTTP::Run(){
 				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
 			}
 
-		}catch(...){
+		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
 
+			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
+			spres.AddHeader("Content-Length","0"); //until we generate the error pages
 			spres.AddHeader("Connection","close");
-			spres.Finalize();
+			spres.Generate(status);
 
 			//prepare the fail response
 			{
