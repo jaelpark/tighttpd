@@ -159,12 +159,17 @@ void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield
 
 void StreamProtocolHTTPresponse::FormatHeader(const char *pname, const char *pfmt, ...){
 	char buffer1[4096];
-
 	va_list args;
 	va_start(args,pfmt);
 	vsnprintf(buffer1,sizeof(buffer1),pfmt,args);
 	va_end(args);
+	AddHeader(pname,buffer1);
+}
 
+void StreamProtocolHTTPresponse::FormatTime(const char *pname, time_t *prt){
+	char buffer1[4096];
+	const struct tm *pti = gmtime(prt);
+	strftime(buffer1,sizeof(buffer1),"%a, %d %b %Y %H:%M:%S %Z\r\n",pti); //mandatory
 	AddHeader(pname,buffer1);
 }
 
@@ -495,6 +500,7 @@ bool ClientProtocolHTTP::Run(){
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			spres.FormatHeader("Content-Length","%u",statbuf.st_size);
 			spres.AddHeader("Content-Type",mimetype.c_str());
+			spres.FormatTime("Last-Modified",&statbuf.st_mtime);
 			//Last-Modified
 
 			spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //don't finalize if the preprocessor wants to add something
