@@ -277,11 +277,10 @@ ClientProtocolHTTP::~ClientProtocolHTTP(){
 ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 	//main HTTP state machine
 	if(sflag1 == PROTOCOL_ACCEPT)
-		return POLL_SKIP;
+		return POLL_SKIP; //SM already initialized
 
 	//no need to check sflags, since only either PROTOCOL_SEND or RECV is enabled according to current state
 	if(state == STATE_RECV_REQUEST || state == STATE_RECV_DATA){
-		//sflag1 == PROTOCOL_RECV
 		sflags = 0; //do not expect traffic until request has been processed
 		return POLL_RUN; //handle the request in parallel Run()
 
@@ -317,7 +316,7 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 		//return POLL_SKIP;
 	}
 
-	//default queries (ACCEPT)
+	//default queries
 	return POLL_SKIP;
 }
 
@@ -372,13 +371,6 @@ bool ClientProtocolHTTP::Run(){
 			if(qv == std::string::npos)
 				qv = enclen;
 
-			//std::istringstream iss(resource);
-			/*tbb_istringstream iss(requri_enc);
-			for(tbb_string tok; getline(iss,tok,'%');){
-				//resource += tok;
-				printf("--%s\n",tok.c_str());
-			}*/
-
 			//basic uri decoding
 			tbb_string resource = "/";
 			resource.reserve(qv);
@@ -395,6 +387,11 @@ bool ClientProtocolHTTP::Run(){
 			}
 
 			//TODO: decode the query (after &-tokenizing)?
+			/*tbb_istringstream iss(requri_enc);
+			for(tbb_string tok; getline(iss,tok,'&');){
+				//resource += tok;
+				printf("--%s\n",tok.c_str());
+			}*/
 
 			//parse the relevant headers ------------------------------------------------------------------------
 			tbb_string hcnt;
@@ -468,6 +465,9 @@ bool ClientProtocolHTTP::Run(){
 				strptime(hcnt.c_str(),DATEFMT_RFC1123,&ti); //Assuming RFC1123 date format
 				modsince = timegm(&ti);
 			}
+			//also: If-Unmodified-Since for range requests
+
+			//generate the response -----------------------------------------------------------------------------
 
 			if(S_ISDIR(statbuf.st_mode)){
 				//Forward directory requests with /[uri] to /[uri]/
@@ -498,18 +498,8 @@ bool ClientProtocolHTTP::Run(){
 				}
 			}
 
-			/*if(method != METHOD_HEAD && modsince != statbuf.st_mtime){
-				if(!spfile.Open(path))
-					throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was supposed to exist
-
-				content = CONTENT_FILE;
-			}*/
-
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			//
-			/*spres.AddHeader("Content-Type",mimetype.c_str());
-			spres.FormatHeader("Content-Length","%u",statbuf.st_size);
-			spres.FormatTime("Last-Modified",&statbuf.st_mtime);*/
 
 			if(modsince != statbuf.st_mtime){
 				if(method != METHOD_HEAD){
@@ -527,16 +517,10 @@ bool ClientProtocolHTTP::Run(){
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
 			}
 
-			/*if(modsince == statbuf.st_time){
-				content = CONTENT_NONE;
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
-			}else spres.Generate(StreamProtocolHTTPresponse::STATUS_200);*/
-
 			//In case of preprocessor, prepare another StreamProtocol.
 			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
 
 			//Get the file size or prepare StreamProtocolData and determine its final length.
-			//Connection: keep-alive requires Content-Length
 
 			if(method == METHOD_POST){
 				psp = &spdata;
