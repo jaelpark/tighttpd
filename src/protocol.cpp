@@ -125,7 +125,7 @@ void StreamProtocolHTTPresponse::Generate(STATUS status){
 	static const char *pstatstr[] = {
 		"200 OK",
 		"303 See Other",
-		"304 Not Found",
+		"304 Not Modified",
 		"400 Bad Request",
 		"403 Forbidden",
 		"404 Not Found",
@@ -141,7 +141,8 @@ void StreamProtocolHTTPresponse::Generate(STATUS status){
 	time_t rt;
 	time(&rt);
 	const struct tm *pti = gmtime(&rt);
-	len = strftime(buffer1,sizeof(buffer1),"Date: %a, %d %b %Y %H:%M:%S %Z\r\n",pti); //mandatory
+#define DATEFMT_RFC1123 "%a, %d %b %Y %H:%M:%S %Z"
+	len = strftime(buffer1,sizeof(buffer1),"Date: " DATEFMT_RFC1123 "\r\n",pti); //mandatory
 	buffer.insert(buffer.begin(),buffer1,buffer1+len);
 
 	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
@@ -169,7 +170,7 @@ void StreamProtocolHTTPresponse::FormatHeader(const char *pname, const char *pfm
 void StreamProtocolHTTPresponse::FormatTime(const char *pname, time_t *prt){
 	char buffer1[4096];
 	const struct tm *pti = gmtime(prt);
-	strftime(buffer1,sizeof(buffer1),"%a, %d %b %Y %H:%M:%S %Z\r\n",pti); //mandatory
+	strftime(buffer1,sizeof(buffer1),DATEFMT_RFC1123,pti); //mandatory
 	AddHeader(pname,buffer1);
 }
 
@@ -461,6 +462,13 @@ bool ClientProtocolHTTP::Run(){
 			if(stat(path,&statbuf) == -1)
 				throw(StreamProtocolHTTPresponse::STATUS_404); //TODO: set psp to 404 file.
 
+			time_t modsince = ~0;
+			if(ParseHeader(lf,spreqstr,"If-Modified-Since",hcnt)){
+				struct tm ti;
+				strptime(hcnt.c_str(),DATEFMT_RFC1123,&ti); //Assuming RFC1123 date format
+				modsince = timegm(&ti);
+			}
+
 			if(S_ISDIR(statbuf.st_mode)){
 				//Forward directory requests with /[uri] to /[uri]/
 				if(requri_enc.back() != '/'){
@@ -490,20 +498,39 @@ bool ClientProtocolHTTP::Run(){
 				}
 			}
 
-			if(method != METHOD_HEAD){
+			/*if(method != METHOD_HEAD && modsince != statbuf.st_mtime){
 				if(!spfile.Open(path))
 					throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was supposed to exist
 
 				content = CONTENT_FILE;
-			}
+			}*/
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
+			//
+			/*spres.AddHeader("Content-Type",mimetype.c_str());
 			spres.FormatHeader("Content-Length","%u",statbuf.st_size);
-			spres.AddHeader("Content-Type",mimetype.c_str());
-			spres.FormatTime("Last-Modified",&statbuf.st_mtime);
-			//Last-Modified
+			spres.FormatTime("Last-Modified",&statbuf.st_mtime);*/
 
-			spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //don't finalize if the preprocessor wants to add something
+			if(modsince != statbuf.st_mtime){
+				if(method != METHOD_HEAD){
+					if(!spfile.Open(path))
+						throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was supposed to exist
+					content = CONTENT_FILE;
+				}
+
+				spres.AddHeader("Content-Type",mimetype.c_str());
+				spres.FormatHeader("Content-Length","%u",statbuf.st_size);
+				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //don't finalize if the preprocessor wants to add something
+			}else{
+				//content = CONTENT_NONE;
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
+			}
+
+			/*if(modsince == statbuf.st_time){
+				content = CONTENT_NONE;
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
+			}else spres.Generate(StreamProtocolHTTPresponse::STATUS_200);*/
 
 			//In case of preprocessor, prepare another StreamProtocol.
 			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
@@ -524,8 +551,7 @@ bool ClientProtocolHTTP::Run(){
 		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
-			spres.AddHeader("Content-Length","0"); //until we generate the error pages
-			spres.AddHeader("Connection","close");
+			spres.AddHeader("Content-Length","0"); //until we read or generate the error pages
 			spres.Generate(status);
 
 			//prepare the fail response
