@@ -22,7 +22,6 @@ public:
 		STATE_SUCCESS, //required transfer complete
 		STATE_CLOSED, //socket closed by remote
 		STATE_CORRUPTED, //protocol violation
-		//STATE_ERROR //some internal error
 	};
 	Socket::ClientSocket socket;
 	STATE state;
@@ -168,12 +167,9 @@ protected:
 
 public:
 	static bool InitConfigModule(PyObject *, const char *);
-	//static PyObject * Py_get(PyObject *, PyObject *);
 	static PyObject *psub;
 	static PyObject *pycode;
 	static PyObject *pyglb;
-	//
-	//static PyObject *pyaddr;
 };
 
 }
