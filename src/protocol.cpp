@@ -1,6 +1,7 @@
 #include "main.h"
 #include "socket.h"
 #include "protocol.h"
+#include "pagegen.h"
 
 #include <stdarg.h> //FormatHeader()
 #include <time.h> //date header field
@@ -294,8 +295,8 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			}else return POLL_CLOSE;
 		}
 
-		const char test[] = "Some content\r\n";
-		spdata.Append(test,strlen(test));
+		//const char test[] = "Some content\r\n";
+		//spdata.Append(test,strlen(test));
 
 		psp = (content == CONTENT_DATA)?
 			(StreamProtocolData*)&spdata:(StreamProtocolData*)&spfile;
@@ -534,9 +535,14 @@ bool ClientProtocolHTTP::Run(){
 
 		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
 
+			PageGen::HTTPError errorpage(&spdata);
+			errorpage.Generate(status);
+
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
-			spres.AddHeader("Content-Length","0"); //until we read or generate the error pages
+			spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
 			spres.Generate(status);
+
+			content = CONTENT_DATA;
 
 			//prepare the fail response
 			{

@@ -13,7 +13,7 @@ HTMLPage::~HTMLPage(){
 	//
 }
 
-HTTPError::HTTPError(Protocol::StreamProtocolData *_psp) : HTMLPage(psp){
+HTTPError::HTTPError(Protocol::StreamProtocolData *_psp) : HTMLPage(_psp){
 	//
 }
 
