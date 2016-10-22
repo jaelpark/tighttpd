@@ -488,20 +488,29 @@ bool ClientProtocolHTTP::Run(){
 						}
 					}
 				}
-
-				if(S_ISDIR(statbuf.st_mode)){
-					//list the contents of this dir, if enabled
-					if(listing){
-						//
-					}else{
-						throw(StreamProtocolHTTPresponse::STATUS_404);
-					}
-				}
 			}
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			//
 
+			if(S_ISDIR(statbuf.st_mode)){
+				//index-file not present
+				//list the contents of this dir, if enabled
+				if(!listing)
+					throw(StreamProtocolHTTPresponse::STATUS_404);
+
+				PageGen::HTTPListDir listdir(&spdata);
+				if(method != METHOD_HEAD){
+					if(!listdir.Generate(locald.c_str(),resource.c_str()))
+						throw(StreamProtocolHTTPresponse::STATUS_500);
+					content = CONTENT_DATA;
+				}
+
+				spres.AddHeader("Content-Type","text/html");
+				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
+
+			}else
 			if(modsince != statbuf.st_mtime){
 				if(method != METHOD_HEAD){
 					if(!spfile.Open(path))
@@ -535,14 +544,18 @@ bool ClientProtocolHTTP::Run(){
 
 		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
 
-			PageGen::HTTPError errorpage(&spdata);
-			errorpage.Generate(status);
+			if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400 && method != METHOD_HEAD){
+				PageGen::HTTPError errorpage(&spdata);
+				errorpage.Generate(status);
+
+				spres.AddHeader("Content-Type","text/html");
+				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
+
+				content = CONTENT_DATA;
+			}
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
-			spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
 			spres.Generate(status);
-
-			content = CONTENT_DATA;
 
 			//prepare the fail response
 			{

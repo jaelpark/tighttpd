@@ -20,8 +20,9 @@ public:
 
 class HTTPListDir : public HTMLPage{
 public:
-	HTTPListDir();
+	HTTPListDir(Protocol::StreamProtocolData *);
 	~HTTPListDir();
+	bool Generate(const char *, const char *);
 };
 
 }
