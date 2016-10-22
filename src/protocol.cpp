@@ -122,19 +122,6 @@ void StreamProtocolHTTPresponse::Reset(){
 }
 
 void StreamProtocolHTTPresponse::Generate(STATUS status){
-	static const char *pstatstr[] = {
-		"200 OK",
-		"303 See Other",
-		"304 Not Modified",
-		"400 Bad Request",
-		"403 Forbidden",
-		"404 Not Found",
-		"413 Request Entity Too Large",
-		"500 Internal Server Error",
-		"501 Not Implemented",
-		"505 HTTP Version Not Supported"
-	};
-
 	char buffer1[4096];
 	size_t len;
 
@@ -173,6 +160,19 @@ void StreamProtocolHTTPresponse::FormatTime(const char *pname, time_t *prt){
 	strftime(buffer1,sizeof(buffer1),DATEFMT_RFC1123,pti); //mandatory
 	AddHeader(pname,buffer1);
 }
+
+const char *StreamProtocolHTTPresponse::pstatstr[StreamProtocolHTTPresponse::STATUS_COUNT] = {
+	"200 OK",
+	"303 See Other",
+	"304 Not Modified",
+	"400 Bad Request",
+	"403 Forbidden",
+	"404 Not Found",
+	"413 Request Entity Too Large",
+	"500 Internal Server Error",
+	"501 Not Implemented",
+	"505 HTTP Version Not Supported"
+};
 
 StreamProtocolData::StreamProtocolData(Socket::ClientSocket _socket) : StreamProtocol(_socket){
 	//
@@ -517,7 +517,7 @@ bool ClientProtocolHTTP::Run(){
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
 			}
 
-			//In case of preprocessor, prepare another StreamProtocol.
+			//In case of preprocessor, prepare another StreamProtocol(Pipe).
 			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
 
 			//Get the file size or prepare StreamProtocolData and determine its final length.
