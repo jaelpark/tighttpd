@@ -59,17 +59,19 @@ bool StreamProtocolHTTPrequest::Read(){
 		return true;
 	}
 
-	size_t req = strlen(buffer1);
-	if(req < len || buffer.size()+len > 50000){
+	if(buffer.size()+len > 50000){
 		state = STATE_CORRUPTED;
 		return true; //HTTP 413
 	}
 
 	buffer.insert(buffer.end(),buffer1,buffer1+len);
 	//Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
-	if(strstr(buffer1,"\r\n\r\n")){
-		state = STATE_SUCCESS;
-		return true;
+	for(uint i = 0, n = buffer.size()-3; i < n; ++i){
+		if(buffer[i+0] == '\r' && buffer[i+1] == '\n' &&
+			buffer[i+2] == '\r' && buffer[i+3] == '\n'){
+			state = STATE_SUCCESS;
+			return true;
+		}
 	}
 
 	return false;
@@ -388,6 +390,7 @@ bool ClientProtocolHTTP::Run(){
 			}
 
 			//TODO: decode the query (after &-tokenizing)?
+			//create also python dictionary for these
 			/*tbb_istringstream iss(requri_enc);
 			for(tbb_string tok; getline(iss,tok,'&');){
 				//resource += tok;
