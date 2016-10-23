@@ -61,7 +61,7 @@ bool StreamProtocolHTTPrequest::Read(){
 
 	if(buffer.size()+len > 50000){
 		state = STATE_CORRUPTED;
-		return true; //HTTP 413
+		return true; //too long, HTTP 413
 	}
 
 	buffer.insert(buffer.end(),buffer1,buffer1+len);
@@ -297,9 +297,6 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			}else return POLL_CLOSE;
 		}
 
-		//const char test[] = "Some content\r\n";
-		//spdata.Append(test,strlen(test));
-
 		psp = (content == CONTENT_DATA)?
 			(StreamProtocolData*)&spdata:(StreamProtocolData*)&spfile;
 		state = STATE_SEND_DATA;
@@ -415,14 +412,18 @@ bool ClientProtocolHTTP::Run(){
 			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
 			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
 
-			if(ParseHeader(lf,spreqstr,"User-Agent",hcnt))
-				PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(hcnt.c_str()));
-			if(ParseHeader(lf,spreqstr,"Accept",hcnt))
-				PyObject_SetAttrString(psub,"accept",PyUnicode_FromString(hcnt.c_str()));
-			if(ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt))
-				PyObject_SetAttrString(psub,"accept_encoding",PyUnicode_FromString(hcnt.c_str()));
-			if(ParseHeader(lf,spreqstr,"Accept-Language",hcnt))
-				PyObject_SetAttrString(psub,"accept_language",PyUnicode_FromString(hcnt.c_str()));
+			if(!ParseHeader(lf,spreqstr,"User-Agent",hcnt))
+				hcnt.clear();
+			PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(hcnt.c_str()));
+			if(!ParseHeader(lf,spreqstr,"Accept",hcnt))
+				hcnt.clear();
+			PyObject_SetAttrString(psub,"accept",PyUnicode_FromString(hcnt.c_str()));
+			if(!ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt))
+				hcnt.clear();
+			PyObject_SetAttrString(psub,"accept_encoding",PyUnicode_FromString(hcnt.c_str()));
+			if(!ParseHeader(lf,spreqstr,"Accept-Language",hcnt))
+				hcnt.clear();
+			PyObject_SetAttrString(psub,"accept_language",PyUnicode_FromString(hcnt.c_str()));
 
 			//prepare the default options
 			PyObject_SetAttrString(psub,"root",PyUnicode_FromString(".")); //current work dir

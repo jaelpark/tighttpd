@@ -47,11 +47,14 @@ bool HTTPListDir::Generate(const char *path, const char *uri){
 	size_t len;
 
 	len = snprintf(buffer1,sizeof(buffer1),"<!DOCTYPE html>\r\n"
-		"<html><head><title>%s</title></head><body><h1>%s</h1>",uri,uri);
+		"<html><head><title>%s</title></head><body><h1>%s</h1>"
+		"<a href=\"..\">..</a><br/>",uri,uri);
 	psp->Append(buffer1,len);
 
 	for(struct dirent *pent = readdir(pdir); pent != 0; pent = readdir(pdir)){
 		//stat()
+		if(strcmp(pent->d_name,".") == 0 || strcmp(pent->d_name,"..") == 0) //dot segments were manually added
+			continue;
 		len = snprintf(buffer1,sizeof(buffer1),"<a href=\"%s\">%s</a><br/>",pent->d_name,pent->d_name); //TODO: links, last modified etc
 		psp->Append(buffer1,len);
 	}
