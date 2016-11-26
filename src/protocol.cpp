@@ -548,15 +548,16 @@ bool ClientProtocolHTTP::Run(){
 
 		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
 
-			if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400 && method != METHOD_HEAD){
+			if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400){
 				PageGen::HTTPError errorpage(&spdata);
 				errorpage.Generate(status);
 
 				spres.AddHeader("Content-Type","text/html");
 				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
 
-				content = CONTENT_DATA;
-			}
+				if(method != METHOD_HEAD)
+					content = CONTENT_DATA;
+			}else spres.AddHeader("Content-Length","0"); //required
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			spres.Generate(status);
