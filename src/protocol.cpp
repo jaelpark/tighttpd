@@ -431,6 +431,8 @@ bool ClientProtocolHTTP::Run(){
 			PyObject_SetAttrString(psub,"listing",PyBool_FromLong(false)); //disable directory listing by default
 			PyObject_SetAttrString(psub,"mimetype",PyUnicode_FromString("application/octet-stream")); //let the config determine this
 			//PyObject_SetAttrString(psub,"index",PyUnicode_FromString("index.html"));
+			PyObject_SetAttrString(psub,"cgi",PyBool_FromLong(false));
+			//PyObject_SetAttrString(psub,"cgibin",PyUnicode_FromString(""));
 
 			if(!PyEval_EvalCode(pycode,pyglb,0)){
 				PyErr_Print();
@@ -456,6 +458,14 @@ bool ClientProtocolHTTP::Run(){
 			pycfg = PyObject_GetAttrString(psub,"mimetype");
 			tbb_string mimetype = tbb_string(PyUnicode_AsUTF8(pycfg));
 			Py_DECREF(pycfg);
+
+			pycfg = PyObject_GetAttrString(psub,"cgi");
+			bool cgi = PyObject_IsTrue(pycfg);
+			Py_DECREF(pycfg);
+
+			/*pycfg = PyObject_GetAttrString(psub,"cgibin");
+			tbb_string cgibin = tbb_string(PyUnicode_AsUTF8(pycfg));
+			Py_DECREF(pycfg);*/
 
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
 			//https://tools.ietf.org/html/rfc3986#section-5.2.4 (dot segments)
@@ -515,17 +525,31 @@ bool ClientProtocolHTTP::Run(){
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
 
 			}else
+			if(cgi){
+				//https://tools.ietf.org/html/rfc3875
+				//
+				//TODO: read data directly to stream protocol
+				/*content = CONTENT_DATA;
+
+				PageGen::HTTPError okpage(&spdata);
+				okpage.Generate(StreamProtocolHTTPresponse::STATUS_200);
+
+				spres.AddHeader("Content-Type","text/html");
+				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //todo: option to omit terminating crlf*/
+
+			}else
 			if(modsince != statbuf.st_mtime){
 				if(method != METHOD_HEAD){
 					if(!spfile.Open(path))
-						throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since file was supposed to exist
+						throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since the file was supposed to exist
 					content = CONTENT_FILE;
 				}
 
 				spres.AddHeader("Content-Type",mimetype.c_str());
 				spres.FormatHeader("Content-Length","%u",statbuf.st_size);
 				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //don't finalize if the preprocessor wants to add something
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
 			}else{
 				//content = CONTENT_NONE;
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
@@ -557,12 +581,13 @@ bool ClientProtocolHTTP::Run(){
 
 				if(method != METHOD_HEAD)
 					content = CONTENT_DATA;
+
 			}else spres.AddHeader("Content-Length","0"); //required
 
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			spres.Generate(status);
 
-			//prepare the fail response
+			//prepare the special/fail response
 			{
 				psp = &spres;
 				state = STATE_SEND_RESPONSE;
