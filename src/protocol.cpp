@@ -7,6 +7,10 @@
 #include <time.h> //date header field
 #include <sys/stat.h> //file stats
 
+#include <csignal>
+#include <stdlib.h> //kill
+#include <fcntl.h> //non-blocking pipe
+
 #include <tbb/scalable_allocator.h>
 #include <tbb/cache_aligned_allocator.h>
 
@@ -52,7 +56,7 @@ StreamProtocolHTTPrequest::~StreamProtocolHTTPrequest(){
 
 bool StreamProtocolHTTPrequest::Read(){
 	char buffer1[4096];
-	size_t len = socket.Recv(buffer1,sizeof(buffer1));
+	ssize_t len = socket.Recv(buffer1,sizeof(buffer1));
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		state = STATE_CLOSED; //Some error occurred or socket was closed
@@ -102,8 +106,8 @@ bool StreamProtocolHTTPresponse::Read(){
 
 bool StreamProtocolHTTPresponse::Write(){
 	tbb_string spresstr(buffer.begin(),buffer.end());
-	size_t res = spresstr.size();
-	size_t len = socket.Send(spresstr.c_str(),res);
+	ssize_t res = spresstr.size();
+	ssize_t len = socket.Send(spresstr.c_str(),res);
 	printf("--------\n%s--------\n",spresstr.c_str()); //debug
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
@@ -124,7 +128,7 @@ void StreamProtocolHTTPresponse::Reset(){
 	buffer.clear();
 }
 
-void StreamProtocolHTTPresponse::Generate(STATUS status){
+void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
 	char buffer1[4096];
 	size_t len;
 
@@ -137,6 +141,9 @@ void StreamProtocolHTTPresponse::Generate(STATUS status){
 
 	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
 	buffer.insert(buffer.begin(),buffer1,buffer1+len);
+
+	if(!crlf)
+		return;
 
 	static const char *pclrf = "\r\n";
 	buffer.insert(buffer.end(),pclrf,pclrf+2);
@@ -171,6 +178,7 @@ const char *StreamProtocolHTTPresponse::pstatstr[StreamProtocolHTTPresponse::STA
 	"400 Bad Request",
 	"403 Forbidden",
 	"404 Not Found",
+	"411 Length Required",
 	"413 Request Entity Too Large",
 	"500 Internal Server Error",
 	"501 Not Implemented",
@@ -187,8 +195,8 @@ StreamProtocolData::~StreamProtocolData(){
 
 bool StreamProtocolData::Write(){
 	tbb_string spresstr(buffer.begin(),buffer.end());
-	size_t res = spresstr.size();
-	size_t len = socket.Send(spresstr.c_str(),res);
+	ssize_t res = spresstr.size();
+	ssize_t len = socket.Send(spresstr.c_str(),res);
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		state = STATE_CLOSED;
@@ -213,6 +221,10 @@ void StreamProtocolData::Reset(){
 	buffer.clear();
 }
 
+void StreamProtocolData::Append(const char *pdata, size_t datal){
+	buffer.insert(buffer.end(),pdata,pdata+datal);
+}
+
 StreamProtocolFile::StreamProtocolFile(Socket::ClientSocket _socket) : StreamProtocol(_socket), pf(0){
 	//
 }
@@ -223,8 +235,8 @@ StreamProtocolFile::~StreamProtocolFile(){
 
 bool StreamProtocolFile::Write(){
 	char buffer1[4096];
-	size_t res = fread(buffer1,1,sizeof(buffer1),pf);
-	size_t len = socket.Send(buffer1,res);
+	ssize_t res = fread(buffer1,1,sizeof(buffer1),pf);
+	ssize_t len = socket.Send(buffer1,res);
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		state = STATE_CLOSED;
@@ -264,11 +276,97 @@ bool StreamProtocolFile::Open(const char *path){
 	return true;
 }
 
-void StreamProtocolData::Append(const char *pdata, size_t datal){
-	buffer.insert(buffer.end(),pdata,pdata+datal);
+StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0){
+	pipefd[0] = 0;
+	pipefd[1] = 0;
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket){
+StreamProtocolCgi::~StreamProtocolCgi(){
+	//
+}
+
+bool StreamProtocolCgi::Write(){
+	char buffer1[4096];
+	errno = 0;
+	ssize_t res = read(pipefd[0],buffer1,sizeof(buffer1));
+	if((res < 0 && errno != EAGAIN) || res == 0){
+		state = STATE_SUCCESS;
+		return true;
+	}
+	if((res < 0 && errno == EAGAIN)){
+		struct timespec ts1;
+		clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts1);
+		long dt = ts1.tv_nsec-ts.tv_nsec;
+		if(dt < 20e6)
+			return false;
+		state = STATE_SUCCESS;
+		return true;
+	}
+	errno = 0;
+	ssize_t len = socket.Send(buffer1,res);
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		state = STATE_CLOSED;
+		return true;
+	}
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+
+	//TODO: res < len case
+
+	return false;
+}
+
+bool StreamProtocolCgi::Read(){
+	//recv POST and write to pipe
+	//client should send content-length
+	//write(pipefd[0],postdata,l);
+}
+
+void StreamProtocolCgi::Reset(){
+	state = STATE_PENDING;
+	if(pid != 0){
+		kill(pid,SIGINT);
+		pid = 0;
+		close(pipefd[0]);
+		close(pipefd[1]);
+		pipefd[0] = 0;
+		pipefd[1] = 0;
+	}
+}
+
+void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pcontent){
+	char buffer[4096];
+	size_t l = snprintf(buffer,sizeof(buffer),"%s=%s",pname,pcontent);
+	std::deque<char, tbb::cache_aligned_allocator<char>>::const_iterator m = envbuf.insert(envbuf.end(),buffer,buffer+l+1);
+	envptr.push_back(&(*m));
+}
+
+bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal){
+	envptr.push_back(0);
+
+	pipe(pipefd);
+	fcntl(pipefd[0],F_SETFL,fcntl(pipefd[0],F_GETFL,0)|O_NONBLOCK);
+
+	/*printf(">opening cgi pipe...\n");
+	for(uint i = 0; i < envptr.size()-1; ++i)
+		printf("|%s|\n",envptr[i]);*/
+
+	pid = fork();
+	if(pid == 0){
+		dup2(pipefd[0],STDIN_FILENO);
+		dup2(pipefd[1],STDOUT_FILENO);
+		execle("/usr/bin/php-cgi","php-cgi",0,envptr.data());
+		//
+		exit(0); //exit child in case of failure
+	}
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	datal = _datal;
+
+	return true;
+}
+
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket), spcgi(_socket){
 	Reset();
 }
 
@@ -297,8 +395,17 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			}else return POLL_CLOSE;
 		}
 
-		psp = (content == CONTENT_DATA)?
-			(StreamProtocolData*)&spdata:(StreamProtocolData*)&spfile;
+		switch(content){
+		case CONTENT_DATA:
+			psp = (StreamProtocolData*)&spdata;
+			break;
+		case CONTENT_FILE:
+			psp = (StreamProtocolData*)&spfile;
+			break;
+		case CONTENT_CGI:
+			psp = (StreamProtocolData*)&spcgi;
+			break;
+		}
 		state = STATE_SEND_DATA;
 		//sflags = PROTOCOL_SEND; //keep sending
 
@@ -339,6 +446,7 @@ bool ClientProtocolHTTP::Run(){
 
 			//parse the request line ----------------------------------------------------------------------------
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
+			static const char *pmstr[] = {"HEAD","GET","POST"};
 			static const uint ml[] = {5,4,5};
 			if(request.compare(0,ml[0],"HEAD ") == 0)
 				method = METHOD_HEAD;
@@ -504,6 +612,8 @@ bool ClientProtocolHTTP::Run(){
 				}
 			}
 
+			if(cgi)
+				connection = CONNECTION_CLOSE; //length of the content unknown
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
 			//
 
@@ -527,16 +637,25 @@ bool ClientProtocolHTTP::Run(){
 			}else
 			if(cgi){
 				//https://tools.ietf.org/html/rfc3875
-				//
-				//TODO: read data directly to stream protocol
-				/*content = CONTENT_DATA;
+				ulong contentl = 0; //TODO: supply to cgi stream proto interface
+				if(method == METHOD_POST && !ParseHeader(lf,spreqstr,"Content-Length",hcnt) && !StrToUl(hcnt.c_str(),contentl))
+					throw(StreamProtocolHTTPresponse::STATUS_411);
 
-				PageGen::HTTPError okpage(&spdata);
-				okpage.Generate(StreamProtocolHTTPresponse::STATUS_200);
+				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
+				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd");
+				//spcgi.AddEnvironmentVar("SERVER_ADDR","localhost");
+				//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
+				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
+				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
+				spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
+				{
+					if(!spcgi.Open(path,contentl))
+						throw(StreamProtocolHTTPresponse::STATUS_500);
+					content = CONTENT_CGI;
+				}
 
-				spres.AddHeader("Content-Type","text/html");
-				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_200); //todo: option to omit terminating crlf*/
+				//preprocessor should add all the relevant headers + crlf
+				spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
 
 			}else
 			if(modsince != statbuf.st_mtime){
@@ -625,9 +744,10 @@ void ClientProtocolHTTP::Clear(){
 	spres.Reset();
 	spdata.Reset();
 	spfile.Reset();
+	spcgi.Reset();
 }
 
-bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){
+bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content) const{
 	size_t hs = spreqstr.find("\r\n"+header+": ",lf);
 	if(hs == std::string::npos)
 		return false;
@@ -638,6 +758,14 @@ bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, cons
 		return false;
 	content = spreqstr.substr(hc,he-hc);
 	return true;
+}
+
+bool ClientProtocolHTTP::StrToUl(const char *pstr, ulong &ul) const{
+	char *pendptr = 0;
+	errno = 0;
+
+	ul = strtoul(pstr,&pendptr,10);
+	return !(errno == ERANGE || *pendptr != 0 || pstr == pendptr);
 }
 
 bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){

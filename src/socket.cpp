@@ -96,11 +96,11 @@ ClientSocket::~ClientSocket(){
 	//
 }
 
-size_t ClientSocket::Recv(void *pbuf, size_t bufl) const{
+ssize_t ClientSocket::Recv(void *pbuf, size_t bufl) const{
 	return recv(fd,pbuf,bufl,MSG_DONTWAIT);
 }
 
-size_t ClientSocket::Send(const void *pbuf, size_t bufl) const{
+ssize_t ClientSocket::Send(const void *pbuf, size_t bufl) const{
 	return send(fd,pbuf,bufl,0);
 }
 

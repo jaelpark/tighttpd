@@ -82,13 +82,14 @@ public:
 		STATUS_400, //bad request
 		STATUS_403, //forbidden
 		STATUS_404, //not found
+		STATUS_411, //length required
 		STATUS_413, //request entity too large
 		STATUS_500, //internal server error
 		STATUS_501, //not implemented
 		STATUS_505, //HTTP version not supported
 		STATUS_COUNT
 	};
-	void Generate(STATUS); //Generate the final response buffer with the given status and headers
+	void Generate(STATUS, bool = true); //Generate the final response buffer with the given status and headers
 	void AddHeader(const char *, const char *);
 	void FormatHeader(const char *, const char *, ...);
 	void FormatTime(const char *, time_t *);
@@ -122,7 +123,25 @@ public:
 	size_t len;
 };
 
-//class StreamProtocolFile
+class StreamProtocolCgi : public StreamProtocol{
+public:
+	StreamProtocolCgi(Socket::ClientSocket);
+	~StreamProtocolCgi();
+	bool Read();
+	bool Write();
+	void Reset();
+	//
+	void AddEnvironmentVar(const char *, const char *);
+	bool Open(const char *, size_t);
+	//FILE *pf;
+	int pipefd[2];
+	pid_t pid;
+	std::deque<char, tbb::cache_aligned_allocator<char>> envbuf;
+	std::vector<const char *> envptr;
+	//POST data
+	size_t datal; //client Content-Length
+	struct timespec ts; //cgi timeout counter
+};
 
 class ClientProtocolHTTP : public ClientProtocol{
 public:
@@ -134,11 +153,15 @@ public:
 protected:
 	void Reset();
 	void Clear();
-	bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
+	//utils
+	bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &) const;
+	bool StrToUl(const char *, ulong &) const;
+	//
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
 	StreamProtocolData spdata;
 	StreamProtocolFile spfile;
+	StreamProtocolCgi spcgi;
 	//TODO: timeout timer
 	enum STATE{
 		STATE_RECV_REQUEST,
@@ -161,7 +184,8 @@ protected:
 	enum CONTENT{
 		CONTENT_NONE,
 		CONTENT_DATA,
-		CONTENT_FILE
+		CONTENT_FILE,
+		CONTENT_CGI
 	} content;
 
 

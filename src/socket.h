@@ -20,8 +20,8 @@ public:
 	ClientSocket(const ClientSocket &);
 	~ClientSocket();
 	//int Connect(...);
-	size_t Recv(void *, size_t) const;
-	size_t Send(const void *, size_t) const;
+	ssize_t Recv(void *, size_t) const;
+	ssize_t Send(const void *, size_t) const;
 	void Close() const;
 	bool Identify(char *, size_t) const;
 	int fd;
