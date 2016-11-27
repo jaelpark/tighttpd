@@ -258,6 +258,7 @@ bool StreamProtocolFile::Write(){
 
 bool StreamProtocolFile::Read(){
 	//
+	return false;
 }
 
 void StreamProtocolFile::Reset(){
@@ -279,8 +280,7 @@ bool StreamProtocolFile::Open(const char *path){
 }
 
 StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0){
-	//pipefd[0] = 0;
-	//pipefd[1] = 0;
+	//
 }
 
 StreamProtocolCgi::~StreamProtocolCgi(){
@@ -319,8 +319,6 @@ bool StreamProtocolCgi::Write(){
 }
 
 bool StreamProtocolCgi::Read(){
-	//recv POST and write it to script stdin
-	//TODO: request overflow, see request protocol class (pleak->postl);
 	char buffer1[4096];
 	ssize_t len = socket.Recv(buffer1,sizeof(buffer1));
 
@@ -367,10 +365,6 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 
 	pipe(pipefdo);
 	pipe(pipefdi);
-
-	/*printf(">opening cgi pipe...\n");
-	for(uint i = 0; i < envptr.size()-1; ++i)
-		printf("|%s|\n",envptr[i]);*/
 
 	pid = fork();
 	if(pid == 0){
@@ -681,7 +675,7 @@ bool ClientProtocolHTTP::Run(){
 			}else
 			if(cgi){
 				//https://tools.ietf.org/html/rfc3875
-				ulong contentl = 0; //TODO: supply to cgi stream proto interface
+				ulong contentl = 0;
 				if(method == METHOD_POST){
 					if(!ParseHeader(lf,spreqstr,"Content-Length",hcnt) || !StrToUl(hcnt.c_str(),contentl))
 						throw(StreamProtocolHTTPresponse::STATUS_411);
@@ -692,7 +686,7 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
-				//spcgi.AddEnvironmentVar("REMOTE_ADDR","");
+				spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
 				spcgi.AddEnvironmentVar("REMOTE_HOST",host.c_str());
 				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
 				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
@@ -703,7 +697,6 @@ bool ClientProtocolHTTP::Run(){
 				//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
 				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
 				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
-
 
 				spcgi.AddEnvironmentVar("SCRIPT_NAME",resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
@@ -732,11 +725,6 @@ bool ClientProtocolHTTP::Run(){
 				//content = CONTENT_NONE;
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
 			}
-
-			//In case of preprocessor, prepare another StreamProtocol(Pipe).
-			//Determine if the preprocessor wants to override any of the response headers, like the Content-Type.
-
-			//Get the file size or prepare StreamProtocolData and determine its final length.
 
 			if(method == METHOD_POST && spcgi.datac < spcgi.datal){
 				//Receive rest of the POST if request packet didn't leak it already
@@ -777,8 +765,6 @@ bool ClientProtocolHTTP::Run(){
 	if(state == STATE_RECV_DATA){
 		if(spcgi.state == StreamProtocol::STATE_CLOSED)
 			return false;
-		//POST complete
-		//write it to preprocessor stdin or whatever
 
 		psp = &spres;
 		state = STATE_SEND_RESPONSE;
