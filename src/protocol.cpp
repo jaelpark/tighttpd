@@ -324,6 +324,8 @@ bool StreamProtocolCgi::Read(){
 
 void StreamProtocolCgi::Reset(){
 	state = STATE_PENDING;
+	envbuf.clear();
+	envptr.clear();
 	if(pid != 0){
 		kill(pid,SIGINT);
 		pid = 0;
