@@ -65,6 +65,7 @@ public:
 	bool Write();
 	void Reset();
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
+	size_t postl; //POST leaking pointer
 };
 
 class StreamProtocolHTTPresponse : public StreamProtocol{
@@ -82,6 +83,7 @@ public:
 		STATUS_400, //bad request
 		STATUS_403, //forbidden
 		STATUS_404, //not found
+		STATUS_405, //method not allowed
 		STATUS_411, //length required
 		STATUS_413, //request entity too large
 		STATUS_500, //internal server error
@@ -132,14 +134,15 @@ public:
 	void Reset();
 	//
 	void AddEnvironmentVar(const char *, const char *);
-	bool Open(const char *, size_t);
-	//FILE *pf;
-	int pipefd[2];
+	bool Open(const char *, size_t, StreamProtocolHTTPrequest *);
+	int pipefdo[2];
+	int pipefdi[2];
 	pid_t pid;
 	std::deque<char, tbb::cache_aligned_allocator<char>> envbuf;
 	std::vector<const char *> envptr;
 	//POST data
 	size_t datal; //client Content-Length
+	size_t datac; //POST pointer
 	struct timespec ts; //cgi timeout counter
 };
 

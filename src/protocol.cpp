@@ -73,6 +73,7 @@ bool StreamProtocolHTTPrequest::Read(){
 	for(uint i = 0, n = buffer.size()-3; i < n; ++i){
 		if(buffer[i+0] == '\r' && buffer[i+1] == '\n' &&
 			buffer[i+2] == '\r' && buffer[i+3] == '\n'){
+			postl = i+4;
 			state = STATE_SUCCESS;
 			return true;
 		}
@@ -178,6 +179,7 @@ const char *StreamProtocolHTTPresponse::pstatstr[StreamProtocolHTTPresponse::STA
 	"400 Bad Request",
 	"403 Forbidden",
 	"404 Not Found",
+	"405 Method Not Allowed",
 	"411 Length Required",
 	"413 Request Entity Too Large",
 	"500 Internal Server Error",
@@ -277,8 +279,8 @@ bool StreamProtocolFile::Open(const char *path){
 }
 
 StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0){
-	pipefd[0] = 0;
-	pipefd[1] = 0;
+	//pipefd[0] = 0;
+	//pipefd[1] = 0;
 }
 
 StreamProtocolCgi::~StreamProtocolCgi(){
@@ -288,7 +290,7 @@ StreamProtocolCgi::~StreamProtocolCgi(){
 bool StreamProtocolCgi::Write(){
 	char buffer1[4096];
 	errno = 0;
-	ssize_t res = read(pipefd[0],buffer1,sizeof(buffer1));
+	ssize_t res = read(pipefdi[0],buffer1,sizeof(buffer1));
 	if((res < 0 && errno != EAGAIN) || res == 0){
 		state = STATE_SUCCESS;
 		return true;
@@ -317,9 +319,29 @@ bool StreamProtocolCgi::Write(){
 }
 
 bool StreamProtocolCgi::Read(){
-	//recv POST and write to pipe
-	//client should send content-length
-	//write(pipefd[0],postdata,l);
+	//recv POST and write it to script stdin
+	//TODO: request overflow, see request protocol class (pleak->postl);
+	char buffer1[4096];
+	ssize_t len = socket.Recv(buffer1,sizeof(buffer1));
+
+	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+		close(pipefdo[1]);
+		state = STATE_CLOSED; //Some error occurred or socket was closed
+		return true;
+	}
+
+	datac += len;
+	write(pipefdo[1],buffer1,len);
+
+	if(datac >= datal){
+		close(pipefdo[1]);
+		state = STATE_SUCCESS;
+		return true;
+	}
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+
+	return false;
 }
 
 void StreamProtocolCgi::Reset(){
@@ -329,10 +351,7 @@ void StreamProtocolCgi::Reset(){
 	if(pid != 0){
 		kill(pid,SIGINT);
 		pid = 0;
-		close(pipefd[0]);
-		close(pipefd[1]);
-		pipefd[0] = 0;
-		pipefd[1] = 0;
+		close(pipefdi[0]);
 	}
 }
 
@@ -343,11 +362,11 @@ void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pconten
 	envptr.push_back(&(*m));
 }
 
-bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal){
+bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *pleak){
 	envptr.push_back(0);
 
-	pipe(pipefd);
-	fcntl(pipefd[0],F_SETFL,fcntl(pipefd[0],F_GETFL,0)|O_NONBLOCK);
+	pipe(pipefdo);
+	pipe(pipefdi);
 
 	/*printf(">opening cgi pipe...\n");
 	for(uint i = 0; i < envptr.size()-1; ++i)
@@ -355,15 +374,32 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal){
 
 	pid = fork();
 	if(pid == 0){
-		dup2(pipefd[0],STDIN_FILENO);
-		dup2(pipefd[1],STDOUT_FILENO);
+		dup2(pipefdo[0],STDIN_FILENO); //0
+		close(pipefdo[0]);
+		close(pipefdo[1]);
+		dup2(pipefdi[1],STDOUT_FILENO); //1
+		close(pipefdi[0]);
+		close(pipefdi[1]);
+
 		execle("/usr/bin/php-cgi","php-cgi",0,envptr.data());
 		//
 		exit(0); //exit child in case of failure
 	}
 
+	close(pipefdo[0]);
+	close(pipefdi[1]);
+
+	fcntl(pipefdi[0],F_SETFL,fcntl(pipefdi[0],F_GETFL,0)|O_NONBLOCK);
+
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	datac = 0;
 	datal = _datal;
+
+	if(pleak->postl < pleak->buffer.size()){
+		tbb_string leakstr(pleak->buffer.begin()+pleak->postl,pleak->buffer.end());
+		datac += write(pipefdo[1],leakstr.c_str(),leakstr.size());
+		close(pipefdo[1]);
+	}
 
 	return true;
 }
@@ -578,6 +614,14 @@ bool ClientProtocolHTTP::Run(){
 			tbb_string cgibin = tbb_string(PyUnicode_AsUTF8(pycfg));
 			Py_DECREF(pycfg);*/
 
+			if(cgi)
+				connection = CONNECTION_CLOSE; //length of the content unknown
+			else
+			if(method == METHOD_POST){
+				spres.AddHeader("Allow","GET,HEAD");
+				throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POSt
+			}
+
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
 			//https://tools.ietf.org/html/rfc3986#section-5.2.4 (dot segments)
 
@@ -615,10 +659,7 @@ bool ClientProtocolHTTP::Run(){
 				}
 			}
 
-			if(cgi)
-				connection = CONNECTION_CLOSE; //length of the content unknown
 			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
-			//
 
 			if(S_ISDIR(statbuf.st_mode)){
 				//index-file not present
@@ -641,11 +682,14 @@ bool ClientProtocolHTTP::Run(){
 			if(cgi){
 				//https://tools.ietf.org/html/rfc3875
 				ulong contentl = 0; //TODO: supply to cgi stream proto interface
-				if(method == METHOD_POST && !ParseHeader(lf,spreqstr,"Content-Length",hcnt) && !StrToUl(hcnt.c_str(),contentl))
-					throw(StreamProtocolHTTPresponse::STATUS_411);
-				else hcnt = "0";
-				spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
-				//spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
+				if(method == METHOD_POST){
+					if(!ParseHeader(lf,spreqstr,"Content-Length",hcnt) || !StrToUl(hcnt.c_str(),contentl))
+						throw(StreamProtocolHTTPresponse::STATUS_411);
+					spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
+					if(!ParseHeader(lf,spreqstr,"Content-Type",hcnt))
+						throw(StreamProtocolHTTPresponse::STATUS_400);
+					spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
+				}
 
 				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
 				//spcgi.AddEnvironmentVar("REMOTE_ADDR","");
@@ -664,7 +708,7 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("SCRIPT_NAME",resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
 				{
-					if(!spcgi.Open(path,contentl))
+					if(!spcgi.Open(path,contentl,&spreq))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_CGI;
 				}
@@ -694,8 +738,9 @@ bool ClientProtocolHTTP::Run(){
 
 			//Get the file size or prepare StreamProtocolData and determine its final length.
 
-			if(method == METHOD_POST){
-				psp = &spdata;
+			if(method == METHOD_POST && spcgi.datac < spcgi.datal){
+				//Receive rest of the POST if request packet didn't leak it already
+				psp = &spcgi;
 				state = STATE_RECV_DATA;
 				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 			}else{
@@ -730,13 +775,14 @@ bool ClientProtocolHTTP::Run(){
 		}
 	}else
 	if(state == STATE_RECV_DATA){
-		if(spdata.state == StreamProtocol::STATE_CLOSED)
+		if(spcgi.state == StreamProtocol::STATE_CLOSED)
 			return false;
 		//POST complete
 		//write it to preprocessor stdin or whatever
 
-		//state = STATE_SEND_RESPONSE;
-		//sflags = PROTOCOL_SEND;
+		psp = &spres;
+		state = STATE_SEND_RESPONSE;
+		sflags = PROTOCOL_SEND;
 	}
 
 	return true;
