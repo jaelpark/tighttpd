@@ -505,20 +505,21 @@ bool ClientProtocolHTTP::Run(){
 			}*/
 
 			//parse the relevant headers ------------------------------------------------------------------------
-			tbb_string hcnt;
-			if(!ParseHeader(lf,spreqstr,"Host",hcnt))
+			tbb_string host;
+			if(!ParseHeader(lf,spreqstr,"Host",host))
 				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
 
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
 
+			tbb_string hcnt;
 			if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
 				connection = CONNECTION_KEEPALIVE;
 			else connection = CONNECTION_CLOSE;
 
 			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
 			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
-			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(hcnt.c_str()));
+			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(host.c_str()));
 			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
 			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
 
@@ -642,14 +643,26 @@ bool ClientProtocolHTTP::Run(){
 				ulong contentl = 0; //TODO: supply to cgi stream proto interface
 				if(method == METHOD_POST && !ParseHeader(lf,spreqstr,"Content-Length",hcnt) && !StrToUl(hcnt.c_str(),contentl))
 					throw(StreamProtocolHTTPresponse::STATUS_411);
+				else hcnt = "0";
+				spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
+				//spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
 
+				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
+				//spcgi.AddEnvironmentVar("REMOTE_ADDR","");
+				spcgi.AddEnvironmentVar("REMOTE_HOST",host.c_str());
+				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
+				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
-				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd");
+
+				spcgi.AddEnvironmentVar("SERVER_NAME","server"); //TODO: config
 				//spcgi.AddEnvironmentVar("SERVER_ADDR","localhost");
 				//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
+				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
+				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
+
+
+				spcgi.AddEnvironmentVar("SCRIPT_NAME",resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
-				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
-				spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
 				{
 					if(!spcgi.Open(path,contentl))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
