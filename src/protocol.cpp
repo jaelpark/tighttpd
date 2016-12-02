@@ -288,6 +288,26 @@ StreamProtocolCgi::~StreamProtocolCgi(){
 }
 
 bool StreamProtocolCgi::Write(){
+	/*if(!cgiresp_end){
+	read(pipe)
+	buffer.insert(pipedata)
+	if(crlf){
+		cgiresp_end = true;
+		readstatus();
+		spcgi.Generate(status)
+		buffer.insert(begin,spcgi.buffer)
+	}
+
+	}else
+	if(buffer.size() > 0){
+	send(buffer)
+
+	}else
+	send(pipedata)
+	if(len(send) < len(pipedata)){
+		buffer.insert(pipedata+len(send))
+
+	}*/
 	char buffer1[4096];
 	errno = 0;
 	ssize_t res = read(pipefdi[0],buffer1,sizeof(buffer1));
@@ -299,7 +319,7 @@ bool StreamProtocolCgi::Write(){
 		struct timespec ts1;
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts1);
 		long dt = ts1.tv_nsec-ts.tv_nsec;
-		if(dt < 20e6)
+		if(dt < 5e9)
 			return false;
 		state = STATE_SUCCESS;
 		return true;
@@ -535,9 +555,11 @@ bool ClientProtocolHTTP::Run(){
 			}*/
 
 			//parse the relevant headers ------------------------------------------------------------------------
-			tbb_string host;
+			tbb_string host, referer, useragent;
 			if(!ParseHeader(lf,spreqstr,"Host",host))
 				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
+			ParseHeader(lf,spreqstr,"Referer",referer);
+			ParseHeader(lf,spreqstr,"User-Agent",useragent);
 
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
@@ -550,12 +572,11 @@ bool ClientProtocolHTTP::Run(){
 			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
 			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
 			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(host.c_str()));
+			PyObject_SetAttrString(psub,"referer",PyUnicode_FromString(referer.c_str()));
 			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
 			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
+			PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(useragent.c_str()));
 
-			if(!ParseHeader(lf,spreqstr,"User-Agent",hcnt))
-				hcnt.clear();
-			PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(hcnt.c_str()));
 			if(!ParseHeader(lf,spreqstr,"Accept",hcnt))
 				hcnt.clear();
 			PyObject_SetAttrString(psub,"accept",PyUnicode_FromString(hcnt.c_str()));
@@ -585,7 +606,8 @@ bool ClientProtocolHTTP::Run(){
 			PyObject *pycfg;
 
 			pycfg = PyObject_GetAttrString(psub,"root");
-			tbb_string locald = tbb_string(PyUnicode_AsUTF8(pycfg))+resource; //TODO: check the object type
+			tbb_string root = tbb_string(PyUnicode_AsUTF8(pycfg));
+			tbb_string locald = root+resource; //TODO: check the object type
 			Py_DECREF(pycfg);
 
 			pycfg = PyObject_GetAttrString(psub,"index");
@@ -685,10 +707,17 @@ bool ClientProtocolHTTP::Run(){
 					spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
 				}
 
+				//HTTP_COOKIE
+				/*spcgi.AddEnvironmentVar("HTTP_HOST",host.c_str());
+				spcgi.AddEnvironmentVar("HTTP_REFERER",referer.c_str());
+				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",useragent.c_str());*/
+
+				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
+				spcgi.AddEnvironmentVar("REQUEST_URI",requri_enc.c_str());
+
 				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
 				spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
-				spcgi.AddEnvironmentVar("REMOTE_HOST",host.c_str());
-				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
+				spcgi.AddEnvironmentVar("REMOTE_HOST",address);
 				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
 
@@ -700,13 +729,13 @@ bool ClientProtocolHTTP::Run(){
 
 				spcgi.AddEnvironmentVar("SCRIPT_NAME",resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
+				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",root.c_str());
 				{
 					if(!spcgi.Open(path,contentl,&spreq))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_CGI;
 				}
 
-				//preprocessor should add all the relevant headers + crlf
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
 
 			}else
@@ -732,6 +761,7 @@ bool ClientProtocolHTTP::Run(){
 				state = STATE_RECV_DATA;
 				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 			}else{
+				//TODO: if cgi: state = delayed response generation
 				psp = &spres;
 				state = STATE_SEND_RESPONSE;
 				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
