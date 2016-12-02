@@ -91,7 +91,8 @@ public:
 		STATUS_505, //HTTP version not supported
 		STATUS_COUNT
 	};
-	void Generate(STATUS, bool = true); //Generate the final response buffer with the given status and headers
+	void Generate(const char *, bool = true); //Generate the final response buffer with the given status and headers
+	void Generate(STATUS, bool = true);
 	void AddHeader(const char *, const char *);
 	void FormatHeader(const char *, const char *, ...);
 	void FormatTime(const char *, time_t *);
@@ -134,15 +135,18 @@ public:
 	void Reset();
 	//
 	void AddEnvironmentVar(const char *, const char *);
-	bool Open(const char *, size_t, StreamProtocolHTTPrequest *);
+	bool Open(const char *, size_t, StreamProtocolHTTPrequest *, StreamProtocolHTTPresponse *);
+	StreamProtocolHTTPresponse *pres;
 	int pipefdo[2];
 	int pipefdi[2];
 	pid_t pid;
-	std::deque<char, tbb::cache_aligned_allocator<char>> envbuf;
-	std::vector<const char *> envptr;
+	std::deque<char, tbb::cache_aligned_allocator<char>> buffer; //pipe/socket io buffering
+	std::deque<char, tbb::cache_aligned_allocator<char>> envbuf; //cgi environment variables
+	std::vector<const char *> envptr; //environment string pointers for execle
 	//POST data
 	size_t datal; //client Content-Length
 	size_t datac; //POST pointer
+	bool feedback; //cgi state feedback read
 	struct timespec ts; //cgi timeout counter
 };
 
@@ -156,9 +160,6 @@ public:
 protected:
 	void Reset();
 	void Clear();
-	//utils
-	bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &) const;
-	bool StrToUl(const char *, ulong &) const;
 	//
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
@@ -191,8 +192,12 @@ protected:
 		CONTENT_CGI
 	} content;
 
-
 public:
+	//utils
+	static bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
+	static bool StrToUl(const char *, ulong &);
+	static bool FindBreak(const std::deque<char, tbb::cache_aligned_allocator<char>> *, size_t *); //find double crlf
+	//python
 	static bool InitConfigModule(PyObject *, const char *);
 	static PyObject *psub;
 	static PyObject *pycode;

@@ -69,14 +69,9 @@ bool StreamProtocolHTTPrequest::Read(){
 	}
 
 	buffer.insert(buffer.end(),buffer1,buffer1+len);
-	//Assume that at least "Host:\r\n" is given, as it should be. This makes two CRLFs.
-	for(uint i = 0, n = buffer.size()-3; i < n; ++i){
-		if(buffer[i+0] == '\r' && buffer[i+1] == '\n' &&
-			buffer[i+2] == '\r' && buffer[i+3] == '\n'){
-			postl = i+4;
-			state = STATE_SUCCESS;
-			return true;
-		}
+	if(ClientProtocolHTTP::FindBreak(&buffer,&postl)){
+		state = STATE_SUCCESS;
+		return true;
 	}
 
 	return false;
@@ -129,7 +124,7 @@ void StreamProtocolHTTPresponse::Reset(){
 	buffer.clear();
 }
 
-void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
+void StreamProtocolHTTPresponse::Generate(const char *pstatus, bool crlf){
 	char buffer1[4096];
 	size_t len;
 
@@ -140,7 +135,7 @@ void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
 	len = strftime(buffer1,sizeof(buffer1),"Date: " DATEFMT_RFC1123 "\r\n",pti); //mandatory
 	buffer.insert(buffer.begin(),buffer1,buffer1+len);
 
-	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatstr[status]);
+	len = snprintf(buffer1,sizeof(buffer1),"HTTP/1.1 %s\r\nServer: tighttpd/0.1\r\n",pstatus);
 	buffer.insert(buffer.begin(),buffer1,buffer1+len);
 
 	if(!crlf)
@@ -148,6 +143,10 @@ void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
 
 	static const char *pclrf = "\r\n";
 	buffer.insert(buffer.end(),pclrf,pclrf+2);
+}
+
+void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
+	Generate(pstatstr[status],crlf);
 }
 
 void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield){
@@ -279,7 +278,7 @@ bool StreamProtocolFile::Open(const char *path){
 	return true;
 }
 
-StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0){
+StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0), feedback(false){
 	//
 }
 
@@ -288,26 +287,6 @@ StreamProtocolCgi::~StreamProtocolCgi(){
 }
 
 bool StreamProtocolCgi::Write(){
-	/*if(!cgiresp_end){
-	read(pipe)
-	buffer.insert(pipedata)
-	if(crlf){
-		cgiresp_end = true;
-		readstatus();
-		spcgi.Generate(status)
-		buffer.insert(begin,spcgi.buffer)
-	}
-
-	}else
-	if(buffer.size() > 0){
-	send(buffer)
-
-	}else
-	send(pipedata)
-	if(len(send) < len(pipedata)){
-		buffer.insert(pipedata+len(send))
-
-	}*/
 	char buffer1[4096];
 	errno = 0;
 	ssize_t res = read(pipefdi[0],buffer1,sizeof(buffer1));
@@ -324,16 +303,51 @@ bool StreamProtocolCgi::Write(){
 		state = STATE_SUCCESS;
 		return true;
 	}
+
 	errno = 0;
-	ssize_t len = socket.Send(buffer1,res);
-	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
-		state = STATE_CLOSED;
-		return true;
+
+	//
+	if(!feedback){
+		buffer.insert(buffer.end(),buffer1,buffer1+res);
+
+		size_t postl;
+		if(ClientProtocolHTTP::FindBreak(&buffer,&postl)){
+			tbb_string feedbstr(buffer.begin(),buffer.begin()+postl), status;
+			if(ClientProtocolHTTP::ParseHeader(0,"\r\n"+feedbstr,"Status",status))
+				pres->Generate(status.c_str(),false);
+			else pres->Generate(Protocol::StreamProtocolHTTPresponse::STATUS_200,false);
+
+			buffer.insert(buffer.begin(),pres->buffer.begin(),pres->buffer.end());
+			feedback = true;
+
+			tbb_string spresstr(buffer.begin(),buffer.end());
+		}
+	}
+
+	if(feedback){
+		if(buffer.size() > 0){
+			tbb_string spresstr(buffer.begin(),buffer.end());
+			ssize_t len = socket.Send(spresstr.c_str(),spresstr.size());
+
+			if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+				state = STATE_CLOSED;
+				return true;
+			}
+
+			buffer.erase(buffer.begin(),buffer.begin()+len);
+		}else{
+			ssize_t len = socket.Send(buffer1,res);
+			if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
+				state = STATE_CLOSED;
+				return true;
+			}
+
+			if(len < res)
+				buffer.insert(buffer.end(),buffer1+len,buffer1+res);
+		}
 	}
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
-
-	//TODO: res < len case
 
 	return false;
 }
@@ -349,7 +363,7 @@ bool StreamProtocolCgi::Read(){
 	}
 
 	datac += len;
-	write(pipefdo[1],buffer1,len);
+	write(pipefdo[1],buffer1,len); //assume that pipe is available for writing
 
 	if(datac >= datal){
 		close(pipefdo[1]);
@@ -364,6 +378,8 @@ bool StreamProtocolCgi::Read(){
 
 void StreamProtocolCgi::Reset(){
 	state = STATE_PENDING;
+	feedback = false;
+	buffer.clear();
 	envbuf.clear();
 	envptr.clear();
 	if(pid != 0){
@@ -380,7 +396,7 @@ void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pconten
 	envptr.push_back(&(*m));
 }
 
-bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *pleak){
+bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *pleak, StreamProtocolHTTPresponse *_pres){
 	envptr.push_back(0);
 
 	pipe(pipefdo);
@@ -406,6 +422,7 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 	fcntl(pipefdi[0],F_SETFL,fcntl(pipefdi[0],F_GETFL,0)|O_NONBLOCK);
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	pres = _pres;
 	datac = 0;
 	datal = _datal;
 
@@ -489,7 +506,7 @@ bool ClientProtocolHTTP::Run(){
 			if(spreq.state == StreamProtocol::STATE_CLOSED)
 				return false;
 
-			tbb_string spreqstr(spreq.buffer.begin(),spreq.buffer.end());
+			tbb_string spreqstr(spreq.buffer.begin(),spreq.buffer.begin()+spreq.postl);
 
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
 			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
@@ -731,12 +748,13 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
 				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",root.c_str());
 				{
-					if(!spcgi.Open(path,contentl,&spreq))
+					if(!spcgi.Open(path,contentl,&spreq,&spres))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_CGI;
 				}
 
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
+				//delayed response generation: cgi class handles this after checking the status feedback
+				//spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
 
 			}else
 			if(modsince != statbuf.st_mtime){
@@ -760,8 +778,13 @@ bool ClientProtocolHTTP::Run(){
 				psp = &spcgi;
 				state = STATE_RECV_DATA;
 				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
+			}else
+			if(cgi){
+				//In case of cgi, the response is integrated to content due to need to check the status feedback
+				psp = &spcgi;
+				state = STATE_SEND_DATA;
+				sflags = PROTOCOL_SEND;
 			}else{
-				//TODO: if cgi: state = delayed response generation
 				psp = &spres;
 				state = STATE_SEND_RESPONSE;
 				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
@@ -796,8 +819,8 @@ bool ClientProtocolHTTP::Run(){
 		if(spcgi.state == StreamProtocol::STATE_CLOSED)
 			return false;
 
-		psp = &spres;
-		state = STATE_SEND_RESPONSE;
+		psp = &spcgi;
+		state = STATE_SEND_DATA;
 		sflags = PROTOCOL_SEND;
 	}
 
@@ -824,7 +847,7 @@ void ClientProtocolHTTP::Clear(){
 	spcgi.Reset();
 }
 
-bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content) const{
+bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){
 	size_t hs = spreqstr.find("\r\n"+header+": ",lf);
 	if(hs == std::string::npos)
 		return false;
@@ -837,12 +860,23 @@ bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, cons
 	return true;
 }
 
-bool ClientProtocolHTTP::StrToUl(const char *pstr, ulong &ul) const{
+bool ClientProtocolHTTP::StrToUl(const char *pstr, ulong &ul){
 	char *pendptr = 0;
 	errno = 0;
 
 	ul = strtoul(pstr,&pendptr,10);
 	return !(errno == ERANGE || *pendptr != 0 || pstr == pendptr);
+}
+
+bool ClientProtocolHTTP::FindBreak(const std::deque<char, tbb::cache_aligned_allocator<char>> *pbuffer, size_t *pp){
+	for(uint i = 0, n = pbuffer->size()-3; i < n; ++i){
+		if((*pbuffer)[i+0] == '\r' && (*pbuffer)[i+1] == '\n' &&
+			(*pbuffer)[i+2] == '\r' && (*pbuffer)[i+3] == '\n'){
+			*pp = i+4;
+			return true;
+		}
+	}
+	return false;
 }
 
 bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
