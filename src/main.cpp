@@ -105,7 +105,6 @@ int main(int argc, const char **pargv){
 		//Run() parallel queue
 		//serial node for python execution?
 		//also, final epoll_ctl must be serial and somehow synchronized with the loop below (spin mutex for each protocol class?)
-		//TODO: if work queue is empty, block indefinitely (-1). Otherwise return immediately (0).
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
 			if(events[i].data.ptr == &server){
 				for(;;){

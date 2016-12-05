@@ -4,7 +4,7 @@
 #include "pagegen.h"
 
 #include <stdarg.h> //FormatHeader()
-#include <time.h> //date header field
+#include <time.h> //date header field, connection timeout
 #include <sys/stat.h> //file stats
 
 #include <csignal>
@@ -358,7 +358,7 @@ bool StreamProtocolCgi::Read(){
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		close(pipefdo[1]);
-		state = STATE_CLOSED; //Some error occurred or socket was closed
+		state = STATE_CLOSED;
 		return true;
 	}
 
@@ -881,7 +881,6 @@ bool ClientProtocolHTTP::FindBreak(const std::deque<char, tbb::cache_aligned_all
 
 bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
 	static const char *psubn = "http";
-	//static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,ghttpmeth,0,0,0,0};
 	static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,0,0,0,0,0};
 
 	psub = PyModule_Create(&ghttpmod);
