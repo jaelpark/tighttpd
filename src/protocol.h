@@ -3,9 +3,6 @@
 
 namespace Protocol{
 
-typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
-typedef std::basic_istringstream<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_istringstream;
-
 #define PROTOCOL_RECV 0x1
 #define PROTOCOL_SEND 0x2
 #define PROTOCOL_ACCEPT 0x4

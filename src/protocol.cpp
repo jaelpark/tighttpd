@@ -547,10 +547,9 @@ bool ClientProtocolHTTP::Run(){
 			size_t qv = requri_enc.find('?',0); //find the beginning of the query part
 			if(qv == std::string::npos)
 				qv = enclen;
-
-			//basic uri decoding
-			tbb_string resource = "/";
-			resource.reserve(qv);
+			
+			psi->resource = "/";
+			psi->resource.reserve(qv);
 			for(uint i = 1; i < qv; ++i){
 				if(requri_enc[i] == '%'){
 					if(i >= qv-2)
@@ -558,9 +557,9 @@ bool ClientProtocolHTTP::Run(){
 					tbb_string enc = requri_enc.substr(i+1,2);
 					ulong c = strtoul(enc.c_str(),0,16);
 					if(c != 0 && c < 256)
-						resource += (char)c;
+						psi->resource += (char)c;
 					i += 2;
-				}else resource += requri_enc[i];
+				}else psi->resource += requri_enc[i];
 			}
 
 			//TODO: decode the query (after &-tokenizing)?
@@ -575,11 +574,11 @@ bool ClientProtocolHTTP::Run(){
 
 			psi->ResetConfig();
 
-			tbb_string host, referer, useragent;
-			if(!ParseHeader(lf,spreqstr,"Host",host))
+			//tbb_string host, referer, useragent;
+			if(!ParseHeader(lf,spreqstr,"Host",psi->host))
 				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
-			ParseHeader(lf,spreqstr,"Referer",referer);
-			ParseHeader(lf,spreqstr,"User-Agent",useragent);
+			ParseHeader(lf,spreqstr,"Referer",psi->referer);
+			ParseHeader(lf,spreqstr,"User-Agent",psi->useragent);
 
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
@@ -589,24 +588,16 @@ bool ClientProtocolHTTP::Run(){
 				connection = CONNECTION_KEEPALIVE;
 			else connection = CONNECTION_CLOSE;
 
-			psi->uri = std::string(requri_enc.c_str());
-			psi->resource = std::string(resource.c_str());
-			psi->host = std::string(host.c_str());
-			psi->referer = std::string(referer.c_str());
-			psi->address = std::string(address);
-			psi->useragent = std::string(useragent.c_str());
-
-			psi->accept = std::string(ParseHeader(lf,spreqstr,"Accept",hcnt)?hcnt.c_str():"");
-			psi->acceptenc = std::string(ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt)?hcnt.c_str():"");
-			psi->acceptlan = std::string(ParseHeader(lf,spreqstr,"Accept-Language",hcnt)?hcnt.c_str():"");
+			psi->uri = requri_enc;
+			psi->address = tbb_string(address);
+			ParseHeader(lf,spreqstr,"Accept",psi->accept);
+			ParseHeader(lf,spreqstr,"Accept-Encoding",psi->acceptenc);
+			ParseHeader(lf,spreqstr,"Accept-Language",psi->acceptlan);
 
 			psi->Accept();
 
-			//retrieve the configured options
-			tbb_string root = tbb_string(psi->root.c_str());
-			resource = tbb_string(psi->resource.c_str());
-			tbb_string locald = root+resource; //TODO: check the object type
-			tbb_string mimetype = tbb_string(psi->mimetype.c_str());
+			tbb_string locald = psi->root+psi->resource; //TODO: check the object type
+			//tbb_string mimetype = tbb_string(psi->mimetype.c_str());
 			bool index = psi->index;
 			bool listing = psi->listing;
 			bool cgi = psi->cgi;
@@ -667,7 +658,7 @@ bool ClientProtocolHTTP::Run(){
 
 				PageGen::HTTPListDir listdir(&spdata);
 				if(method != METHOD_HEAD){
-					if(!listdir.Generate(locald.c_str(),resource.c_str(),psi))
+					if(!listdir.Generate(locald.c_str(),psi->resource.c_str(),psi))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_DATA;
 				}
@@ -709,9 +700,9 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
 				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
 
-				spcgi.AddEnvironmentVar("SCRIPT_NAME",resource.c_str());
+				spcgi.AddEnvironmentVar("SCRIPT_NAME",psi->resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
-				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",root.c_str());
+				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",psi->root.c_str());
 				{
 					if(!spcgi.Open(path,contentl,&spreq,&spres))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
@@ -729,7 +720,7 @@ bool ClientProtocolHTTP::Run(){
 					content = CONTENT_FILE;
 				}
 
-				spres.AddHeader("Content-Type",mimetype.c_str());
+				spres.AddHeader("Content-Type",psi->mimetype.c_str());
 				spres.FormatHeader("Content-Length","%u",statbuf.st_size);
 				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);

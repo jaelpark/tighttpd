@@ -5,11 +5,11 @@
 #include <string.h> //strerror etc.
 
 #include <tbb/tbb.h>
-//#include <Python.h>
 
 typedef unsigned int uint;
 
-#define SERVER_FLAG_TLS 0x1
+typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
+typedef std::basic_istringstream<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_istringstream;
 
 class ServerInterface{
 public:
@@ -21,26 +21,26 @@ public:
 	//
 	//server config variables
 	//std::string software;
-	std::string name;
+	tbb_string name;
 	uint port;
 	bool tls;
 	//todo: certificates
 	//client config variables
-	std::string root;
-	std::string mimetype;
+	tbb_string root;
+	tbb_string resource;
+	tbb_string mimetype;
 	bool index;
 	bool listing;
 	bool cgi;
 	//client constants
-	std::string host;
-	std::string uri;
-	std::string resource;
-	std::string referer;
-	std::string address;
-	std::string useragent;
-	std::string accept;
-	std::string acceptenc;
-	std::string acceptlan;
+	tbb_string host;
+	tbb_string uri;
+	tbb_string referer;
+	tbb_string address;
+	tbb_string useragent;
+	tbb_string accept;
+	tbb_string acceptenc;
+	tbb_string acceptlan;
 };
 
 void DebugPrintf(const char *, ...);

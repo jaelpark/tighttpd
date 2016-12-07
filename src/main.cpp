@@ -78,31 +78,58 @@ public:
 };
 std::vector<PythonServerManager::SocketObjectPair> PythonServerManager::slist;
 
+struct tbb_string_to_object{
+	static PyObject * convert(tbb_string const &s){
+		return boost::python::incref(boost::python::object(s.c_str()).ptr());
+	}
+};
+
+struct tbb_string_from_object{
+	static void * convertible(PyObject *pyobj){
+		return PyUnicode_Check(pyobj)?pyobj:0;
+	}
+
+	static void construct(PyObject *pyobj, boost::python::converter::rvalue_from_python_stage1_data *pdata){
+		const char *pstr = PyUnicode_AsUTF8(pyobj);
+
+		void *pdst = ((boost::python::converter::rvalue_from_python_storage<tbb_string> *)pdata)->storage.bytes;
+		new(pdst) tbb_string(pstr);
+
+		pdata->convertible = pdst;
+	}
+};
+
 BOOST_PYTHON_MODULE(ServerInterface){
+	boost::python::to_python_converter<tbb_string,tbb_string_to_object>();
+	boost::python::converter::registry::push_back(&tbb_string_from_object::convertible,&tbb_string_from_object::construct,
+		boost::python::type_id<tbb_string>());
+
+#define make_setter1(x) make_setter(&ServerInterface::x,boost::python::return_value_policy<boost::python::return_by_value>())
+#define make_getter1(x) make_getter(&ServerInterface::x,boost::python::return_value_policy<boost::python::return_by_value>())
 	boost::python::class_<PythonServerProxy,boost::noncopyable>("http")
 		.def("setup",&ServerInterface::Setup)
 		.def("accept",&ServerInterface::Accept)
 		//server config
 		//.def_readwrite("software",&ServerInterface::software)
-		.def_readwrite("name",&ServerInterface::name)
+		.add_property("name",make_getter1(name),make_setter1(name))
 		.def_readwrite("port",&ServerInterface::port)
 		.def_readwrite("tls",&ServerInterface::tls)
 		//client config
-		.def_readwrite("root",&ServerInterface::root)
-		.def_readwrite("mimetype",&ServerInterface::mimetype)
+		.add_property("root",make_getter1(root),make_setter1(root))
+		.add_property("resource",make_getter1(resource),make_setter1(resource))
+		.add_property("mimetype",make_getter1(mimetype),make_setter1(mimetype))
 		.def_readwrite("index",&ServerInterface::index)
 		.def_readwrite("listing",&ServerInterface::listing)
 		.def_readwrite("cgi",&ServerInterface::cgi)
 		//client constants
-		.def_readonly("host",&ServerInterface::host)
-		.def_readonly("uri",&ServerInterface::uri)
-		.def_readwrite("resource",&ServerInterface::resource)
-		.def_readonly("referer",&ServerInterface::referer)
-		.def_readonly("address",&ServerInterface::address)
-		.def_readonly("useragent",&ServerInterface::useragent)
-		.def_readonly("accept",&ServerInterface::accept)
-		.def_readonly("accept_encoding",&ServerInterface::acceptenc)
-		.def_readonly("accept_language",&ServerInterface::acceptlan)
+		.add_property("host",make_getter1(host))
+		.add_property("uri",make_getter1(uri))
+		.add_property("referer",make_getter1(referer))
+		.add_property("address",make_getter1(address))
+		.add_property("useragent",make_getter1(useragent))
+		.add_property("accept",make_getter1(accept))
+		.add_property("accept_encoding",make_getter1(acceptenc))
+		.add_property("accept_language",make_getter1(acceptlan))
 		;
 	boost::python::def("create",PythonServerManager::Create);
 }
@@ -165,6 +192,7 @@ int main(int argc, const char **pargv){
 	for(;;){
 		//Run() parallel queue
 		//serial node for python execution?
+		//thread_specific ServerInterface
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
 			PythonServerManager::SocketObjectPair *psop = 0;
 			for(uint j = 0, m = PythonServerManager::slist.size(); j < m; ++j){
