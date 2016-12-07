@@ -152,7 +152,7 @@ public:
 
 class ClientProtocolHTTP : public ClientProtocol{
 public:
-	ClientProtocolHTTP(Socket::ClientSocket);
+	ClientProtocolHTTP(Socket::ClientSocket, ServerInterface *);
 	~ClientProtocolHTTP();
 	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
@@ -160,6 +160,8 @@ public:
 protected:
 	void Reset();
 	void Clear();
+	//
+	ServerInterface *psi;
 	//
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
@@ -197,11 +199,6 @@ public:
 	static bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
 	static bool StrToUl(const char *, ulong &);
 	static bool FindBreak(const std::deque<char, tbb::cache_aligned_allocator<char>> *, size_t *); //find double crlf
-	//python
-	static bool InitConfigModule(PyObject *, const char *);
-	static PyObject *psub;
-	static PyObject *pycode;
-	static PyObject *pyglb;
 };
 
 }

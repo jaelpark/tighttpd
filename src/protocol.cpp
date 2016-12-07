@@ -435,7 +435,7 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 	return true;
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket) : ClientProtocol(_socket,PROTOCOL_RECV), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket), spcgi(_socket){
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket, ServerInterface *_psi) : ClientProtocol(_socket,PROTOCOL_RECV), psi(_psi), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket), spcgi(_socket){
 	Reset();
 }
 
@@ -572,9 +572,12 @@ bool ClientProtocolHTTP::Run(){
 			}*/
 
 			//parse the relevant headers ------------------------------------------------------------------------
+
+			psi->ResetConfig();
+
 			tbb_string host, referer, useragent;
 			if(!ParseHeader(lf,spreqstr,"Host",host))
-				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by 1.1 standard
+				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
 			ParseHeader(lf,spreqstr,"Referer",referer);
 			ParseHeader(lf,spreqstr,"User-Agent",useragent);
 
@@ -586,73 +589,35 @@ bool ClientProtocolHTTP::Run(){
 				connection = CONNECTION_KEEPALIVE;
 			else connection = CONNECTION_CLOSE;
 
-			PyObject_SetAttrString(psub,"uri",PyUnicode_FromString(requri_enc.c_str()));
-			PyObject_SetAttrString(psub,"resource",PyUnicode_FromString(resource.c_str()));
-			PyObject_SetAttrString(psub,"host",PyUnicode_FromString(host.c_str()));
-			PyObject_SetAttrString(psub,"referer",PyUnicode_FromString(referer.c_str()));
-			PyObject_SetAttrString(psub,"address",PyUnicode_FromString(address));
-			PyObject_SetAttrString(psub,"connection",PyLong_FromLong(connection));
-			PyObject_SetAttrString(psub,"useragent",PyUnicode_FromString(useragent.c_str()));
+			psi->uri = std::string(requri_enc.c_str());
+			psi->resource = std::string(resource.c_str());
+			psi->host = std::string(host.c_str());
+			psi->referer = std::string(referer.c_str());
+			psi->address = std::string(address);
+			psi->useragent = std::string(useragent.c_str());
 
-			if(!ParseHeader(lf,spreqstr,"Accept",hcnt))
-				hcnt.clear();
-			PyObject_SetAttrString(psub,"accept",PyUnicode_FromString(hcnt.c_str()));
-			if(!ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt))
-				hcnt.clear();
-			PyObject_SetAttrString(psub,"accept_encoding",PyUnicode_FromString(hcnt.c_str()));
-			if(!ParseHeader(lf,spreqstr,"Accept-Language",hcnt))
-				hcnt.clear();
-			PyObject_SetAttrString(psub,"accept_language",PyUnicode_FromString(hcnt.c_str()));
+			psi->accept = std::string(ParseHeader(lf,spreqstr,"Accept",hcnt)?hcnt.c_str():"");
+			psi->acceptenc = std::string(ParseHeader(lf,spreqstr,"Accept-Encoding",hcnt)?hcnt.c_str():"");
+			psi->acceptlan = std::string(ParseHeader(lf,spreqstr,"Accept-Language",hcnt)?hcnt.c_str():"");
 
-			//prepare the default options
-			PyObject_SetAttrString(psub,"root",PyUnicode_FromString(".")); //current work dir
-			PyObject_SetAttrString(psub,"index",PyBool_FromLong(true)); //enable index pages
-			PyObject_SetAttrString(psub,"listing",PyBool_FromLong(false)); //disable directory listing by default
-			PyObject_SetAttrString(psub,"mimetype",PyUnicode_FromString("application/octet-stream")); //let the config determine this
-			//PyObject_SetAttrString(psub,"index",PyUnicode_FromString("index.html"));
-			PyObject_SetAttrString(psub,"cgi",PyBool_FromLong(false));
-			//PyObject_SetAttrString(psub,"cgibin",PyUnicode_FromString(""));
-
-			if(!PyEval_EvalCode(pycode,pyglb,0)){
-				PyErr_Print();
-
-				throw(StreamProtocolHTTPresponse::STATUS_500);
-			}
+			psi->Accept();
 
 			//retrieve the configured options
-			PyObject *pycfg;
-
-			pycfg = PyObject_GetAttrString(psub,"root");
-			tbb_string root = tbb_string(PyUnicode_AsUTF8(pycfg));
+			tbb_string root = tbb_string(psi->root.c_str());
+			resource = tbb_string(psi->resource.c_str());
 			tbb_string locald = root+resource; //TODO: check the object type
-			Py_DECREF(pycfg);
-
-			pycfg = PyObject_GetAttrString(psub,"index");
-			bool index = PyObject_IsTrue(pycfg);
-			Py_DECREF(pycfg);
-
-			pycfg = PyObject_GetAttrString(psub,"listing");
-			bool listing = PyObject_IsTrue(pycfg);
-			Py_DECREF(pycfg);
-
-			pycfg = PyObject_GetAttrString(psub,"mimetype");
-			tbb_string mimetype = tbb_string(PyUnicode_AsUTF8(pycfg));
-			Py_DECREF(pycfg);
-
-			pycfg = PyObject_GetAttrString(psub,"cgi");
-			bool cgi = PyObject_IsTrue(pycfg);
-			Py_DECREF(pycfg);
-
-			/*pycfg = PyObject_GetAttrString(psub,"cgibin");
-			tbb_string cgibin = tbb_string(PyUnicode_AsUTF8(pycfg));
-			Py_DECREF(pycfg);*/
+			tbb_string mimetype = tbb_string(psi->mimetype.c_str());
+			bool index = psi->index;
+			bool listing = psi->listing;
+			bool cgi = psi->cgi;
+			//cgibin
 
 			if(cgi)
 				connection = CONNECTION_CLOSE; //length of the content unknown
 			else
 			if(method == METHOD_POST){
 				spres.AddHeader("Allow","GET,HEAD");
-				throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POSt
+				throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POST
 			}
 
 			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
@@ -681,7 +646,7 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				if(index){
-					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php"};
+					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.py","index.pl","index.cgi"};
 					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
 						tbb_string page = locald+pindex[i];
 						if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode)){
@@ -702,7 +667,7 @@ bool ClientProtocolHTTP::Run(){
 
 				PageGen::HTTPListDir listdir(&spdata);
 				if(method != METHOD_HEAD){
-					if(!listdir.Generate(locald.c_str(),resource.c_str()))
+					if(!listdir.Generate(locald.c_str(),resource.c_str(),psi))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_DATA;
 				}
@@ -720,7 +685,7 @@ bool ClientProtocolHTTP::Run(){
 						throw(StreamProtocolHTTPresponse::STATUS_411);
 					spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
 					if(!ParseHeader(lf,spreqstr,"Content-Type",hcnt))
-						throw(StreamProtocolHTTPresponse::STATUS_400);
+						hcnt.clear();//throw(StreamProtocolHTTPresponse::STATUS_400);
 					spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
 				}
 
@@ -738,7 +703,7 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
 
-				spcgi.AddEnvironmentVar("SERVER_NAME","server"); //TODO: config
+				spcgi.AddEnvironmentVar("SERVER_NAME",psi->name.c_str());
 				//spcgi.AddEnvironmentVar("SERVER_ADDR","localhost");
 				//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
 				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
@@ -794,7 +759,7 @@ bool ClientProtocolHTTP::Run(){
 
 			if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400){
 				PageGen::HTTPError errorpage(&spdata);
-				errorpage.Generate(status);
+				errorpage.Generate(status,psi);
 
 				spres.AddHeader("Content-Type","text/html");
 				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
@@ -804,7 +769,7 @@ bool ClientProtocolHTTP::Run(){
 
 			}else spres.AddHeader("Content-Length","0"); //required
 
-			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
+			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close"); //warning: possible double
 			spres.Generate(status);
 
 			//prepare the special/fail response
@@ -878,34 +843,5 @@ bool ClientProtocolHTTP::FindBreak(const std::deque<char, tbb::cache_aligned_all
 	}
 	return false;
 }
-
-bool ClientProtocolHTTP::InitConfigModule(PyObject *pmod, const char *pcfgsrc){
-	static const char *psubn = "http";
-	static struct PyModuleDef ghttpmod = {PyModuleDef_HEAD_INIT,psubn,"doc",-1,0,0,0,0,0};
-
-	psub = PyModule_Create(&ghttpmod);
-	PyModule_AddObject(pmod,psubn,psub);
-
-	PyModule_AddIntConstant(psub,"port",8080);
-
-	PyModule_AddIntConstant(psub,"CONNECTION_CLOSE",CONNECTION_CLOSE);
-	PyModule_AddIntConstant(psub,"CONNECTION_KEEPALIVE",CONNECTION_KEEPALIVE);
-	//PyModule_AddStringConstant
-
-	pyglb = PyDict_New();
-	PyDict_SetItemString(pyglb,"__builtins__",PyEval_GetBuiltins());
-
-	pycode = Py_CompileString(pcfgsrc,"config.py",Py_file_input);
-	if(!pycode){
-		PyErr_Print();
-		return false;
-	}
-
-	return true;
-}
-
-PyObject * ClientProtocolHTTP::psub = 0;
-PyObject * ClientProtocolHTTP::pycode = 0;
-PyObject * ClientProtocolHTTP::pyglb = 0;
 
 }
