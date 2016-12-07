@@ -15,14 +15,14 @@ class HTTPError : public HTMLPage{
 public:
 	HTTPError(Protocol::StreamProtocolData *);
 	~HTTPError();
-	void Generate(Protocol::StreamProtocolHTTPresponse::STATUS);
+	void Generate(Protocol::StreamProtocolHTTPresponse::STATUS, const ServerInterface *);
 };
 
 class HTTPListDir : public HTMLPage{
 public:
 	HTTPListDir(Protocol::StreamProtocolData *);
 	~HTTPListDir();
-	bool Generate(const char *, const char *);
+	bool Generate(const char *, const char *, const ServerInterface *);
 };
 
 }
