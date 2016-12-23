@@ -547,7 +547,7 @@ bool ClientProtocolHTTP::Run(){
 			size_t qv = requri_enc.find('?',0); //find the beginning of the query part
 			if(qv == std::string::npos)
 				qv = enclen;
-			
+
 			psi->resource = "/";
 			psi->resource.reserve(qv);
 			for(uint i = 1; i < qv; ++i){
@@ -664,7 +664,7 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				spres.AddHeader("Content-Type","text/html");
-				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
+				spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
 
 			}else
@@ -721,7 +721,7 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				spres.AddHeader("Content-Type",psi->mimetype.c_str());
-				spres.FormatHeader("Content-Length","%u",statbuf.st_size);
+				spres.FormatHeader("Content-Length","%lu",statbuf.st_size);
 				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
 			}else{
@@ -753,7 +753,7 @@ bool ClientProtocolHTTP::Run(){
 				errorpage.Generate(status,psi);
 
 				spres.AddHeader("Content-Type","text/html");
-				spres.FormatHeader("Content-Length","%u",spdata.buffer.size());
+				spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
 
 				if(method != METHOD_HEAD)
 					content = CONTENT_DATA;
