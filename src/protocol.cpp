@@ -327,6 +327,8 @@ bool StreamProtocolCgi::Write(){
 				pres->Generate(status.c_str(),false);
 			else pres->Generate(Protocol::StreamProtocolHTTPresponse::STATUS_200,false);
 
+			//TODO: Check if Content-Length is given. If the amount of data read is small, it can also be determined here so that
+			//persistent connection can be used.
 			buffer.insert(buffer.begin(),pres->buffer.begin(),pres->buffer.end());
 			feedback = true;
 
@@ -456,11 +458,8 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 		}
 
 		write(pipefdo[1],leakstr.c_str(),datac-leak); //TODO: leakwrite
-		if(datac >= datal){
+		if(datac >= datal)
 			close(pipefdo[1]);
-			//
-			//preq->buffer.erase(preq->buffer.begin()+preq->postl,preq->buffer.begin()+datal);
-		}
 
 		preq->postl = datal; //on Reset(), the request data will be erased up to the end of the POST
 	}
@@ -621,6 +620,7 @@ bool ClientProtocolHTTP::Run(){
 			if(!ParseHeader(lf,spreqstr,"Host",psi->host))
 				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
 			ParseHeader(lf,spreqstr,"Referer",psi->referer);
+			ParseHeader(lf,spreqstr,"Cookie",psi->cookie);
 			ParseHeader(lf,spreqstr,"User-Agent",psi->useragent);
 
 			char address[256] = "0.0.0.0";
@@ -724,9 +724,14 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				//HTTP_COOKIE
-				/*spcgi.AddEnvironmentVar("HTTP_HOST",host.c_str());
-				spcgi.AddEnvironmentVar("HTTP_REFERER",referer.c_str());
-				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",useragent.c_str());*/
+				spcgi.AddEnvironmentVar("HTTP_HOST",psi->host.c_str());
+				//spcgi.AddEnvironmentVar("HTTP_REFERER",psi->referer.c_str());
+				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",psi->useragent.c_str());
+				spcgi.AddEnvironmentVar("HTTP_COOKIE",psi->cookie.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT",psi->accept.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT_ENCODING",psi->acceptenc.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT_LANGUAGE",psi->acceptlan.c_str());
+				spcgi.AddEnvironmentVar("HTTP_CONNECTION","close");
 
 				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
 				spcgi.AddEnvironmentVar("REQUEST_URI",requri_enc.c_str());
@@ -734,6 +739,7 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
 				spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
 				spcgi.AddEnvironmentVar("REMOTE_HOST",address);
+				//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //psi->port
 				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
 

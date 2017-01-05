@@ -36,6 +36,7 @@ public:
 	tbb_string host;
 	tbb_string uri;
 	tbb_string referer;
+	tbb_string cookie;
 	tbb_string address;
 	tbb_string useragent;
 	tbb_string accept;
