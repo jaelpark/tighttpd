@@ -84,7 +84,17 @@ bool StreamProtocolHTTPrequest::Write(){
 
 void StreamProtocolHTTPrequest::Reset(){
 	state = STATE_PENDING;
-	buffer.clear();
+	//buffer.clear();
+	buffer.erase(buffer.begin(),buffer.begin()+postl);
+}
+
+bool StreamProtocolHTTPrequest::CheckPipeline(){
+	if(buffer.size() >= 4 && ClientProtocolHTTP::FindBreak(&buffer,&postl)){
+		state = STATE_SUCCESS;
+		return true;
+	}
+
+	return false;
 }
 
 StreamProtocolHTTPresponse::StreamProtocolHTTPresponse(Socket::ClientSocket _socket) : StreamProtocol(_socket){
@@ -363,7 +373,7 @@ bool StreamProtocolCgi::Read(){
 	}
 
 	datac += len;
-	write(pipefdo[1],buffer1,len); //assume that pipe is available for writing
+	write(pipefdo[1],buffer1,len); //assume that the pipe is available for writing
 
 	if(datac >= datal){
 		close(pipefdo[1]);
@@ -460,6 +470,12 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			Clear();
 			if(connection == CONNECTION_KEEPALIVE){
 				Reset();
+				//check pipelined requests and move to process them immediately if present
+				if(spreq.CheckPipeline()){
+					sflags = 0;
+					return POLL_RUN;
+				}
+				//TODO: POST leak to next request
 				return POLL_SKIP;
 			}else return POLL_CLOSE;
 		}
@@ -485,6 +501,10 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			Clear();
 			if(connection == CONNECTION_KEEPALIVE){
 				Reset();
+				if(spreq.CheckPipeline()){
+					sflags = 0;
+					return POLL_RUN;
+				}
 				return POLL_SKIP;
 			}else return POLL_CLOSE;
 		}

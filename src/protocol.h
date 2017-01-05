@@ -61,6 +61,7 @@ public:
 	bool Read();
 	bool Write();
 	void Reset();
+	bool CheckPipeline();
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 	size_t postl; //POST leaking pointer
 };
