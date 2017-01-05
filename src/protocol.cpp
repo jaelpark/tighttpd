@@ -373,7 +373,14 @@ bool StreamProtocolCgi::Read(){
 	}
 
 	datac += len;
-	write(pipefdo[1],buffer1,len); //assume that the pipe is available for writing
+
+	size_t leak = 0;
+	if(datac > datal){
+		leak = datac-datal;
+		//
+	}
+
+	write(pipefdo[1],buffer1,len-leak); //assume that the pipe is available for writing
 
 	if(datac >= datal){
 		close(pipefdo[1]);
@@ -406,7 +413,7 @@ void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pconten
 	envptr.push_back(&(*m));
 }
 
-bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *pleak, StreamProtocolHTTPresponse *_pres){
+bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *_preq, StreamProtocolHTTPresponse *_pres){
 	envptr.push_back(0);
 
 	pipe(pipefdo);
@@ -432,14 +439,18 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 	fcntl(pipefdi[0],F_SETFL,fcntl(pipefdi[0],F_GETFL,0)|O_NONBLOCK);
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	preq = _preq;
 	pres = _pres;
 	datac = 0;
 	datal = _datal;
 
-	if(pleak->postl < pleak->buffer.size()){
-		tbb_string leakstr(pleak->buffer.begin()+pleak->postl,pleak->buffer.end());
-		datac += write(pipefdo[1],leakstr.c_str(),leakstr.size());
-		close(pipefdo[1]);
+	if(preq->postl < preq->buffer.size()){
+		//Some of the POST packets already received
+		tbb_string leakstr(preq->buffer.begin()+preq->postl,preq->buffer.end());
+		write(pipefdo[1],leakstr.c_str(),leakstr.size());
+		datac += leakstr.size();
+		if(datac >= datal)
+			close(pipefdo[1]);
 	}
 
 	return true;
