@@ -377,7 +377,7 @@ bool StreamProtocolCgi::Read(){
 	size_t leak = 0;
 	if(datac > datal){
 		leak = datac-datal;
-		//
+		preq->buffer.insert(preq->buffer.end(),buffer1+len-leak,buffer1+len); //POST pipelining
 	}
 
 	write(pipefdo[1],buffer1,len-leak); //assume that the pipe is available for writing
@@ -447,10 +447,22 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 	if(preq->postl < preq->buffer.size()){
 		//Some of the POST packets already received
 		tbb_string leakstr(preq->buffer.begin()+preq->postl,preq->buffer.end());
-		write(pipefdo[1],leakstr.c_str(),leakstr.size());
-		datac += leakstr.size();
-		if(datac >= datal)
+		datac = leakstr.size();
+
+		size_t leak = 0;
+		if(datac > datal){
+			leak = datac-datal;
+			//
+		}
+
+		write(pipefdo[1],leakstr.c_str(),datac-leak); //TODO: leakwrite
+		if(datac >= datal){
 			close(pipefdo[1]);
+			//
+			//preq->buffer.erase(preq->buffer.begin()+preq->postl,preq->buffer.begin()+datal);
+		}
+
+		preq->postl = datal; //on Reset(), the request data will be erased up to the end of the POST
 	}
 
 	return true;
