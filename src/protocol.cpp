@@ -590,8 +590,8 @@ bool ClientProtocolHTTP::Run(){
 			if(qv == std::string::npos)
 				qv = enclen;
 
-			psi->resource = "/";
-			psi->resource.reserve(qv);
+			tbb_string requri_dec = "/";
+			requri_dec.reserve(qv);
 			for(uint i = 1; i < qv; ++i){
 				if(requri_enc[i] == '%'){
 					if(i >= qv-2)
@@ -599,18 +599,13 @@ bool ClientProtocolHTTP::Run(){
 					tbb_string enc = requri_enc.substr(i+1,2);
 					ulong c = strtoul(enc.c_str(),0,16);
 					if(c != 0 && c < 256)
-						psi->resource += (char)c;
+						requri_dec += (char)c;
 					i += 2;
-				}else psi->resource += requri_enc[i];
+				}else requri_dec += requri_enc[i];
 			}
 
-			//TODO: decode the query (after &-tokenizing)?
-			//create also python dictionary for these
-			/*tbb_istringstream iss(requri_enc);
-			for(tbb_string tok; getline(iss,tok,'&');){
-				//resource += tok;
-				printf("--%s\n",tok.c_str());
-			}*/
+			//parse and remove dot (./..) segments
+			ParseSegments(requri_dec,psi->resource);
 
 			//parse the relevant headers ------------------------------------------------------------------------
 
@@ -654,8 +649,7 @@ bool ClientProtocolHTTP::Run(){
 				throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POST
 			}
 
-			const char *path = locald.c_str(); //TODO: security checks (for example handle '..' etc)
-			//https://tools.ietf.org/html/rfc3986#section-5.2.4 (dot segments)
+			const char *path = locald.c_str();
 
 			struct stat statbuf;
 			if(stat(path,&statbuf) == -1)
@@ -850,6 +844,57 @@ void ClientProtocolHTTP::Clear(){
 	spdata.Reset();
 	spfile.Reset();
 	spcgi.Reset();
+}
+
+void ClientProtocolHTTP::ParseSegments(tbb_string &uri, tbb_string &out){
+	//dot segment parsing according to https://tools.ietf.org/html/rfc3986#section-5.2.4
+	out.clear();
+	for(;;){
+		if(uri.compare(0,2,"./") == 0){
+			uri.erase(uri.begin(),uri.begin()+2);
+			continue;
+		}else
+		if(uri.compare(0,3,"../") == 0){
+			uri.erase(uri.begin(),uri.begin()+3);
+			continue;
+		}else
+		if(uri.compare(0,3,"/./") == 0){
+			uri.replace(uri.begin(),uri.begin()+3,"/");
+			continue;
+		}else
+		if(uri.compare(0,std::string::npos,"/.") == 0){ //TODO: until '?'
+			uri.replace(uri.begin(),uri.begin()+2,"/");
+			continue;
+		}else
+		if(uri.compare(0,4,"/../") == 0){
+			uri.replace(uri.begin(),uri.begin()+4,"/");
+			size_t t = out.rfind('/');
+			if(t == std::string::npos)
+				t = 0;
+			out.erase(out.begin()+t,out.end());
+		}else
+		if(uri.compare(0,std::string::npos,"/..") == 0){
+			uri.replace(uri.begin(),uri.begin()+3,"/");
+			size_t t = out.rfind('/');
+			if(t == std::string::npos)
+				t = 0;
+			out.erase(out.begin()+t,out.end());
+		}else
+		if(uri.compare(0,std::string::npos,".") == 0){ //TODO: until '?'
+			uri.erase(uri.begin(),uri.begin()+1);
+			continue;
+		}else
+		if(uri.compare(0,std::string::npos,"..") == 0){ //TODO: until '?'
+			uri.erase(uri.begin(),uri.begin()+2);
+			continue;
+		}else{
+			size_t t = uri.find('/',1);
+			out += uri.substr(0,t);
+			if(t == std::string::npos)
+				break;
+			else uri.erase(uri.begin(),uri.begin()+t);
+		}
+	}
 }
 
 bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){

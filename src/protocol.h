@@ -195,6 +195,7 @@ protected:
 
 public:
 	//utils
+	static void ParseSegments(tbb_string &, tbb_string &);
 	static bool ParseHeader(size_t, const tbb_string &, const tbb_string &, tbb_string &);
 	static bool StrToUl(const char *, ulong &);
 	static bool FindBreak(const std::deque<char, tbb::cache_aligned_allocator<char>> *, size_t *); //find double crlf
