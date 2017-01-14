@@ -38,6 +38,7 @@ void ServerInterface::ResetConfig(){
 	cgi = false;
 }
 
+//boost/python bindings for the server configuration
 class PythonServerProxy : public ServerInterface, public boost::python::wrapper<ServerInterface>{
 public:
 	void Setup(){
@@ -118,6 +119,8 @@ BOOST_PYTHON_MODULE(ServerInterface){
 		.add_property("root",make_getter1(root),make_setter1(root))
 		.add_property("resource",make_getter1(resource),make_setter1(resource))
 		.add_property("mimetype",make_getter1(mimetype),make_setter1(mimetype))
+		.add_property("cgibin",make_getter1(cgibin),make_setter1(cgibin))
+		.add_property("cgiarg",make_getter1(cgiarg),make_setter1(cgiarg))
 		.def_readwrite("index",&ServerInterface::index)
 		.def_readwrite("listing",&ServerInterface::listing)
 		.def_readwrite("cgi",&ServerInterface::cgi)

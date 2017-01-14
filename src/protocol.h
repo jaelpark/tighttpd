@@ -133,7 +133,7 @@ public:
 	void Reset();
 	//
 	void AddEnvironmentVar(const char *, const char *);
-	bool Open(const char *, size_t, StreamProtocolHTTPrequest *, StreamProtocolHTTPresponse *);
+	bool Open(const char *, const char *, size_t, StreamProtocolHTTPrequest *, StreamProtocolHTTPresponse *);
 	StreamProtocolHTTPrequest *preq;
 	StreamProtocolHTTPresponse *pres;
 	int pipefdo[2];

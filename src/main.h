@@ -29,6 +29,8 @@ public:
 	tbb_string root;
 	tbb_string resource;
 	tbb_string mimetype;
+	tbb_string cgibin;
+	tbb_string cgiarg;
 	bool index;
 	bool listing;
 	bool cgi;

@@ -415,7 +415,7 @@ void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pconten
 	envptr.push_back(&(*m));
 }
 
-bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTPrequest *_preq, StreamProtocolHTTPresponse *_pres){
+bool StreamProtocolCgi::Open(const char *pcgibin, const char *pcgiarg, size_t _datal, StreamProtocolHTTPrequest *_preq, StreamProtocolHTTPresponse *_pres){
 	envptr.push_back(0);
 
 	pipe(pipefdo);
@@ -430,7 +430,8 @@ bool StreamProtocolCgi::Open(const char *pcgi, size_t _datal, StreamProtocolHTTP
 		close(pipefdi[0]);
 		close(pipefdi[1]);
 
-		execle("/usr/bin/php-cgi","php-cgi",0,envptr.data());
+		//execle("/usr/bin/php-cgi","php-cgi",0,envptr.data());
+		execle(pcgibin,pcgiarg,0,envptr.data());
 		//
 		exit(0); //exit child in case of failure
 	}
@@ -747,7 +748,7 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
 				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",psi->root.c_str());
 				{
-					if(!spcgi.Open(path,contentl,&spreq,&spres))
+					if(!spcgi.Open(psi->cgibin.c_str(),psi->cgiarg.c_str(),contentl,&spreq,&spres))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_CGI;
 				}
@@ -862,7 +863,7 @@ void ClientProtocolHTTP::ParseSegments(tbb_string &uri, tbb_string &out){
 			uri.replace(uri.begin(),uri.begin()+3,"/");
 			continue;
 		}else
-		if(uri.compare(0,std::string::npos,"/.") == 0){ //TODO: until '?'
+		if(uri.compare(0,std::string::npos,"/.") == 0){
 			uri.replace(uri.begin(),uri.begin()+2,"/");
 			continue;
 		}else
@@ -880,11 +881,11 @@ void ClientProtocolHTTP::ParseSegments(tbb_string &uri, tbb_string &out){
 				t = 0;
 			out.erase(out.begin()+t,out.end());
 		}else
-		if(uri.compare(0,std::string::npos,".") == 0){ //TODO: until '?'
+		if(uri.compare(0,std::string::npos,".") == 0){
 			uri.erase(uri.begin(),uri.begin()+1);
 			continue;
 		}else
-		if(uri.compare(0,std::string::npos,"..") == 0){ //TODO: until '?'
+		if(uri.compare(0,std::string::npos,"..") == 0){
 			uri.erase(uri.begin(),uri.begin()+2);
 			continue;
 		}else{
