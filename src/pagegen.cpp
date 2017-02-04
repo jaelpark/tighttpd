@@ -51,6 +51,7 @@ bool HTTPListDir::Generate(const char *path, const char *uri, const ServerInterf
 		"<a href=\"..\">..</a><br/>",uri,uri);
 	psp->Append(buffer1,len);
 
+	//TODO: scandir to sort
 	for(struct dirent *pent = readdir(pdir); pent != 0; pent = readdir(pdir)){
 		//stat()
 		if(strcmp(pent->d_name,".") == 0 || strcmp(pent->d_name,"..") == 0) //dot segments were manually added

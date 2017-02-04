@@ -6,6 +6,8 @@
 
 #include <tbb/tbb.h>
 
+#include <boost/python.hpp>
+
 typedef unsigned int uint;
 
 typedef std::basic_string<char,std::char_traits<char>,tbb::cache_aligned_allocator<char>> tbb_string;
@@ -16,16 +18,23 @@ public:
 	ServerInterface();
 	virtual ~ServerInterface();
 	virtual void Setup();
-	virtual void Accept();
-	void ResetConfig(); //reset client config
+	virtual boost::python::object Accept();
+	//void ResetConfig(); //reset client config
 	//
 	//server config variables
 	//std::string software;
 	tbb_string name;
 	uint port;
 	bool tls;
-	//todo: certificates
-	//client config variables
+};
+
+class ClientInterface{
+public:
+	ClientInterface();
+	virtual ~ClientInterface();
+	virtual void Setup();
+	void ResetConfig(); //reset client config
+	//
 	tbb_string root;
 	tbb_string resource;
 	tbb_string mimetype;

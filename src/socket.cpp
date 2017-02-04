@@ -24,7 +24,7 @@ ServerSocket::~ServerSocket(){
 
 int ServerSocket::Listen(const char *pport){
 	//Create and bind the server socket. The following piece is very generic,
-	//see the linux getaddrinfo manpages for information.
+	//see the linux getaddrinfo man pages for information.
 
 	struct addrinfo h; //hints
 	memset(&h,0,sizeof(struct addrinfo));

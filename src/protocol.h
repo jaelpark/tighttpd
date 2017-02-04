@@ -151,7 +151,7 @@ public:
 
 class ClientProtocolHTTP : public ClientProtocol{
 public:
-	ClientProtocolHTTP(Socket::ClientSocket, ServerInterface *);
+	ClientProtocolHTTP(Socket::ClientSocket, ServerInterface *, ClientInterface *, boost::python::object);
 	~ClientProtocolHTTP();
 	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
@@ -161,6 +161,8 @@ protected:
 	void Clear();
 	//
 	ServerInterface *psi;
+	ClientInterface *pci;
+	boost::python::object clobj; //this is here just to keep the object alive
 	//
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;

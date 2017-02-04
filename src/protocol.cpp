@@ -114,7 +114,7 @@ bool StreamProtocolHTTPresponse::Write(){
 	tbb_string spresstr(buffer.begin(),buffer.end());
 	ssize_t res = spresstr.size();
 	ssize_t len = socket.Send(spresstr.c_str(),res);
-	printf("--------\n%s--------\n",spresstr.c_str()); //debug
+	//printf("--------\n%s--------\n",spresstr.c_str()); //debug
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
 		state = STATE_CLOSED;
@@ -468,7 +468,7 @@ bool StreamProtocolCgi::Open(const char *pcgibin, const char *pcgiarg, size_t _d
 	return true;
 }
 
-ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket, ServerInterface *_psi) : ClientProtocol(_socket,PROTOCOL_RECV), psi(_psi), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket), spcgi(_socket){
+ClientProtocolHTTP::ClientProtocolHTTP(Socket::ClientSocket _socket, ServerInterface *_psi, ClientInterface *_pci, boost::python::object _clobj) : ClientProtocol(_socket,PROTOCOL_RECV), psi(_psi), pci(_pci), clobj(_clobj), spreq(_socket), spres(_socket), spdata(_socket), spfile(_socket), spcgi(_socket){
 	Reset();
 }
 
@@ -606,18 +606,19 @@ bool ClientProtocolHTTP::Run(){
 			}
 
 			//parse and remove dot (./..) segments
-			ParseSegments(requri_dec,psi->resource);
+			ParseSegments(requri_dec,pci->resource);
 
 			//parse the relevant headers ------------------------------------------------------------------------
 
-			psi->ResetConfig();
+			//initialize or restore the default settings
+			pci->ResetConfig();
 
 			//tbb_string host, referer, useragent;
-			if(!ParseHeader(lf,spreqstr,"Host",psi->host))
+			if(!ParseHeader(lf,spreqstr,"Host",pci->host))
 				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
-			ParseHeader(lf,spreqstr,"Referer",psi->referer);
-			ParseHeader(lf,spreqstr,"Cookie",psi->cookie);
-			ParseHeader(lf,spreqstr,"User-Agent",psi->useragent);
+			ParseHeader(lf,spreqstr,"Referer",pci->referer);
+			ParseHeader(lf,spreqstr,"Cookie",pci->cookie);
+			ParseHeader(lf,spreqstr,"User-Agent",pci->useragent);
 
 			char address[256] = "0.0.0.0";
 			socket.Identify(address,sizeof(address));
@@ -627,22 +628,17 @@ bool ClientProtocolHTTP::Run(){
 				connection = CONNECTION_KEEPALIVE;
 			else connection = CONNECTION_CLOSE;
 
-			psi->uri = requri_enc;
-			psi->address = tbb_string(address);
-			ParseHeader(lf,spreqstr,"Accept",psi->accept);
-			ParseHeader(lf,spreqstr,"Accept-Encoding",psi->acceptenc);
-			ParseHeader(lf,spreqstr,"Accept-Language",psi->acceptlan);
+			pci->uri = requri_enc;
+			pci->address = tbb_string(address);
+			ParseHeader(lf,spreqstr,"Accept",pci->accept);
+			ParseHeader(lf,spreqstr,"Accept-Encoding",pci->acceptenc);
+			ParseHeader(lf,spreqstr,"Accept-Language",pci->acceptlan);
 
-			psi->Accept();
+			pci->Setup();
 
-			tbb_string locald = psi->root+psi->resource; //TODO: check the object type
-			//tbb_string mimetype = tbb_string(psi->mimetype.c_str());
-			bool index = psi->index;
-			bool listing = psi->listing;
-			bool cgi = psi->cgi;
-			//cgibin
+			tbb_string locald = pci->root+pci->resource; //TODO: check the object type
 
-			if(cgi)
+			if(pci->cgi)
 				connection = CONNECTION_CLOSE; //length of the content unknown
 			else
 			if(method == METHOD_POST){
@@ -654,7 +650,7 @@ bool ClientProtocolHTTP::Run(){
 
 			struct stat statbuf;
 			if(stat(path,&statbuf) == -1)
-				throw(StreamProtocolHTTPresponse::STATUS_404); //TODO: set psp to 404 file.
+				throw(StreamProtocolHTTPresponse::STATUS_404);
 
 			time_t modsince = ~0;
 			if(ParseHeader(lf,spreqstr,"If-Modified-Since",hcnt)){
@@ -674,7 +670,7 @@ bool ClientProtocolHTTP::Run(){
 					throw(StreamProtocolHTTPresponse::STATUS_303);
 				}
 
-				if(index){
+				if(pci->index){
 					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.py","index.pl","index.cgi"};
 					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
 						tbb_string page = locald+pindex[i];
@@ -691,12 +687,12 @@ bool ClientProtocolHTTP::Run(){
 			if(S_ISDIR(statbuf.st_mode)){
 				//index-file not present
 				//list the contents of this dir, if enabled
-				if(!listing)
+				if(!pci->listing)
 					throw(StreamProtocolHTTPresponse::STATUS_404);
 
 				PageGen::HTTPListDir listdir(&spdata);
 				if(method != METHOD_HEAD){
-					if(!listdir.Generate(locald.c_str(),psi->resource.c_str(),psi))
+					if(!listdir.Generate(locald.c_str(),pci->resource.c_str(),psi))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_DATA;
 				}
@@ -706,7 +702,7 @@ bool ClientProtocolHTTP::Run(){
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
 
 			}else
-			if(cgi){
+			if(pci->cgi){
 				//https://tools.ietf.org/html/rfc3875
 				ulong contentl = 0;
 				if(method == METHOD_POST){
@@ -719,13 +715,13 @@ bool ClientProtocolHTTP::Run(){
 				}
 
 				//HTTP_COOKIE
-				spcgi.AddEnvironmentVar("HTTP_HOST",psi->host.c_str());
-				//spcgi.AddEnvironmentVar("HTTP_REFERER",psi->referer.c_str());
-				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",psi->useragent.c_str());
-				spcgi.AddEnvironmentVar("HTTP_COOKIE",psi->cookie.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT",psi->accept.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT_ENCODING",psi->acceptenc.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT_LANGUAGE",psi->acceptlan.c_str());
+				spcgi.AddEnvironmentVar("HTTP_HOST",pci->host.c_str());
+				//spcgi.AddEnvironmentVar("HTTP_REFERER",pci->referer.c_str());
+				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",pci->useragent.c_str());
+				spcgi.AddEnvironmentVar("HTTP_COOKIE",pci->cookie.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT",pci->accept.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT_ENCODING",pci->acceptenc.c_str());
+				spcgi.AddEnvironmentVar("HTTP_ACCEPT_LANGUAGE",pci->acceptlan.c_str());
 				spcgi.AddEnvironmentVar("HTTP_CONNECTION","close");
 
 				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
@@ -734,7 +730,7 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
 				spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
 				spcgi.AddEnvironmentVar("REMOTE_HOST",address);
-				//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //psi->port
+				//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //pci->port
 				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
 
@@ -744,11 +740,11 @@ bool ClientProtocolHTTP::Run(){
 				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
 				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
 
-				spcgi.AddEnvironmentVar("SCRIPT_NAME",psi->resource.c_str());
+				spcgi.AddEnvironmentVar("SCRIPT_NAME",pci->resource.c_str());
 				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
-				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",psi->root.c_str());
+				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",pci->root.c_str());
 				{
-					if(!spcgi.Open(psi->cgibin.c_str(),psi->cgiarg.c_str(),contentl,&spreq,&spres))
+					if(!spcgi.Open(pci->cgibin.c_str(),pci->cgiarg.c_str(),contentl,&spreq,&spres))
 						throw(StreamProtocolHTTPresponse::STATUS_500);
 					content = CONTENT_CGI;
 				}
@@ -764,7 +760,7 @@ bool ClientProtocolHTTP::Run(){
 					content = CONTENT_FILE;
 				}
 
-				spres.AddHeader("Content-Type",psi->mimetype.c_str());
+				spres.AddHeader("Content-Type",pci->mimetype.c_str());
 				spres.FormatHeader("Content-Length","%lu",statbuf.st_size);
 				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
 				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
@@ -779,7 +775,7 @@ bool ClientProtocolHTTP::Run(){
 				state = STATE_RECV_DATA;
 				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 			}else
-			if(cgi){
+			if(pci->cgi){
 				//In case of cgi, the response is integrated to content due to need to check the status feedback
 				psp = &spcgi;
 				state = STATE_SEND_DATA;
