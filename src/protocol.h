@@ -41,10 +41,11 @@ public:
 	};
 	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
 	virtual POLL Poll(uint) = 0;
-	//Run() method for parallel execution
-	virtual bool Run() = 0;
-	//virtual void RunConfig() = 0;
-	//virtual void RunFinal() = 0;
+	//
+	virtual bool Accept() = 0;
+	virtual void Configure() = 0;
+	virtual void Process() = 0;
+	//
 	//
 protected:
 	StreamProtocol *psp;
@@ -62,8 +63,16 @@ public:
 	bool Write();
 	void Reset();
 	bool CheckPipeline();
+	//
+	enum METHOD{
+		METHOD_HEAD,
+		METHOD_GET,
+		METHOD_POST,
+		METHOD_COUNT, //just the total number
+	};
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
 	size_t postl; //POST leaking pointer
+	static const char *pmethodstr[METHOD_COUNT];
 };
 
 class StreamProtocolHTTPresponse : public StreamProtocol{
@@ -155,7 +164,11 @@ public:
 	~ClientProtocolHTTP();
 	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
-	bool Run();
+	//
+	bool Accept();
+	void Configure();
+	void Process();
+	//
 protected:
 	void Reset();
 	void Clear();
@@ -170,6 +183,15 @@ protected:
 	StreamProtocolFile spfile;
 	StreamProtocolCgi spcgi;
 	//TODO: timeout timer
+
+	//
+	StreamProtocolHTTPresponse::STATUS status;
+	tbb_string spreqstr;
+	tbb_string requri_enc;
+	size_t enclen;
+	size_t lf;
+	size_t qv;
+	//
 	enum STATE{
 		STATE_RECV_REQUEST,
 		STATE_RECV_DATA,
@@ -177,11 +199,7 @@ protected:
 		STATE_SEND_DATA,
 	} state;
 
-	enum METHOD{
-		METHOD_HEAD,
-		METHOD_GET,
-		METHOD_POST
-	} method;
+	StreamProtocolHTTPrequest::METHOD method;
 
 	enum CONNECTION{
 		CONNECTION_CLOSE,

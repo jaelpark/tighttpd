@@ -97,6 +97,12 @@ bool StreamProtocolHTTPrequest::CheckPipeline(){
 	return false;
 }
 
+const char *StreamProtocolHTTPrequest::pmethodstr[StreamProtocolHTTPrequest::METHOD_COUNT] = {
+	"HEAD",
+	"GET",
+	"POST"
+};
+
 StreamProtocolHTTPresponse::StreamProtocolHTTPresponse(Socket::ClientSocket _socket) : StreamProtocol(_socket){
 	//
 }
@@ -483,9 +489,18 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 		return POLL_SKIP; //SM already initialized
 
 	//no need to check sflags, since only either PROTOCOL_SEND or RECV is enabled according to current state
-	if(state == STATE_RECV_REQUEST || state == STATE_RECV_DATA){
+	if(state == STATE_RECV_REQUEST){
 		sflags = 0; //do not expect traffic until request has been processed
 		return POLL_RUN; //handle the request in parallel Run()
+
+	}else
+	if(state == STATE_RECV_DATA){
+		if(spcgi.state == StreamProtocol::STATE_CLOSED)
+			return POLL_CLOSE;
+
+		psp = &spcgi;
+		state = STATE_SEND_DATA;
+		sflags = PROTOCOL_SEND;
 
 	}else
 	if(state == STATE_SEND_RESPONSE){
@@ -539,297 +554,13 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 	return POLL_SKIP;
 }
 
-bool ClientProtocolHTTP::Run(){
-	//
-	if(state == STATE_RECV_REQUEST){
-		try{
-			if(spreq.state == StreamProtocol::STATE_CORRUPTED)
-				throw(StreamProtocolHTTPresponse::STATUS_413); //or 400
-			else
-			if(spreq.state == StreamProtocol::STATE_CLOSED)
-				return false;
-
-			tbb_string spreqstr(spreq.buffer.begin(),spreq.buffer.begin()+spreq.postl);
-
-			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
-			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
-			size_t lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
-			tbb_string request = spreqstr.substr(0,lf);
-
-			//parse the request line ----------------------------------------------------------------------------
-			//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
-			static const char *pmstr[] = {"HEAD","GET","POST"};
-			static const uint ml[] = {5,4,5};
-			if(request.compare(0,ml[0],"HEAD ") == 0)
-				method = METHOD_HEAD;
-			else
-			if(request.compare(0,ml[1],"GET ") == 0)
-				method = METHOD_GET;
-			else
-			if(request.compare(0,ml[2],"POST ") == 0)
-				method = METHOD_POST;
-			else{
-				//
-				throw(StreamProtocolHTTPresponse::STATUS_501);
-			}
-
-			size_t ru = request.find_first_not_of(" ",ml[method]);
-			if(ru == std::string::npos || request[ru] != '/')
-				throw(StreamProtocolHTTPresponse::STATUS_400);
-			size_t rl = request.find(' ',ru+1);
-			if(rl == std::string::npos)
-				throw(StreamProtocolHTTPresponse::STATUS_400);
-			size_t hv = request.find_first_not_of(" ",rl+1);
-			if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0)
-				throw(StreamProtocolHTTPresponse::STATUS_505);
-
-			tbb_string requri_enc = request.substr(ru,rl-ru);
-			size_t enclen = requri_enc.size();
-
-			//https://tools.ietf.org/html/rfc3986#section-3 (syntax components)
-			size_t qv = requri_enc.find('?',0); //find the beginning of the query part
-			if(qv == std::string::npos)
-				qv = enclen;
-
-			tbb_string requri_dec = "/";
-			requri_dec.reserve(qv);
-			for(uint i = 1; i < qv; ++i){
-				if(requri_enc[i] == '%'){
-					if(i >= qv-2)
-						break;
-					tbb_string enc = requri_enc.substr(i+1,2);
-					ulong c = strtoul(enc.c_str(),0,16);
-					if(c != 0 && c < 256)
-						requri_dec += (char)c;
-					i += 2;
-				}else requri_dec += requri_enc[i];
-			}
-
-			//parse and remove dot (./..) segments
-			ParseSegments(requri_dec,pci->resource);
-
-			//parse the relevant headers ------------------------------------------------------------------------
-
-			//initialize or restore the default settings
-			pci->ResetConfig();
-
-			//tbb_string host, referer, useragent;
-			if(!ParseHeader(lf,spreqstr,"Host",pci->host))
-				throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
-			ParseHeader(lf,spreqstr,"Referer",pci->referer);
-			ParseHeader(lf,spreqstr,"Cookie",pci->cookie);
-			ParseHeader(lf,spreqstr,"User-Agent",pci->useragent);
-
-			char address[256] = "0.0.0.0";
-			socket.Identify(address,sizeof(address));
-
-			tbb_string hcnt;
-			if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
-				connection = CONNECTION_KEEPALIVE;
-			else connection = CONNECTION_CLOSE;
-
-			pci->uri = requri_enc;
-			pci->address = tbb_string(address);
-			ParseHeader(lf,spreqstr,"Accept",pci->accept);
-			ParseHeader(lf,spreqstr,"Accept-Encoding",pci->acceptenc);
-			ParseHeader(lf,spreqstr,"Accept-Language",pci->acceptlan);
-
-			pci->Setup();
-
-			tbb_string locald = pci->root+pci->resource; //TODO: check the object type
-
-			if(pci->cgi)
-				connection = CONNECTION_CLOSE; //length of the content unknown
-			else
-			if(method == METHOD_POST){
-				spres.AddHeader("Allow","GET,HEAD");
-				throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POST
-			}
-
-			const char *path = locald.c_str();
-
-			struct stat statbuf;
-			if(stat(path,&statbuf) == -1)
-				throw(StreamProtocolHTTPresponse::STATUS_404);
-
-			time_t modsince = ~0;
-			if(ParseHeader(lf,spreqstr,"If-Modified-Since",hcnt)){
-				struct tm ti;
-				strptime(hcnt.c_str(),DATEFMT_RFC1123,&ti); //Assuming RFC1123 date format
-				modsince = timegm(&ti);
-			}
-			//also: If-Unmodified-Since for range requests
-
-			//generate the response -----------------------------------------------------------------------------
-
-			if(S_ISDIR(statbuf.st_mode)){
-				//Forward directory requests with /[uri] to /[uri]/
-				if(requri_enc.back() != '/'){
-					requri_enc += '/';
-					spres.FormatHeader("Location",requri_enc.c_str());
-					throw(StreamProtocolHTTPresponse::STATUS_303);
-				}
-
-				if(pci->index){
-					static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.py","index.pl","index.cgi"};
-					for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
-						tbb_string page = locald+pindex[i];
-						if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode)){
-							locald = page;
-							break;
-						}
-					}
-				}
-			}
-
-			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
-
-			if(S_ISDIR(statbuf.st_mode)){
-				//index-file not present
-				//list the contents of this dir, if enabled
-				if(!pci->listing)
-					throw(StreamProtocolHTTPresponse::STATUS_404);
-
-				PageGen::HTTPListDir listdir(&spdata);
-				if(method != METHOD_HEAD){
-					if(!listdir.Generate(locald.c_str(),pci->resource.c_str(),psi))
-						throw(StreamProtocolHTTPresponse::STATUS_500);
-					content = CONTENT_DATA;
-				}
-
-				spres.AddHeader("Content-Type","text/html");
-				spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
-
-			}else
-			if(pci->cgi){
-				//https://tools.ietf.org/html/rfc3875
-				ulong contentl = 0;
-				if(method == METHOD_POST){
-					if(!ParseHeader(lf,spreqstr,"Content-Length",hcnt) || !StrToUl(hcnt.c_str(),contentl))
-						throw(StreamProtocolHTTPresponse::STATUS_411);
-					spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
-					if(!ParseHeader(lf,spreqstr,"Content-Type",hcnt))
-						hcnt.clear();//throw(StreamProtocolHTTPresponse::STATUS_400);
-					spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
-				}
-
-				//HTTP_COOKIE
-				spcgi.AddEnvironmentVar("HTTP_HOST",pci->host.c_str());
-				//spcgi.AddEnvironmentVar("HTTP_REFERER",pci->referer.c_str());
-				spcgi.AddEnvironmentVar("HTTP_USER_AGENT",pci->useragent.c_str());
-				spcgi.AddEnvironmentVar("HTTP_COOKIE",pci->cookie.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT",pci->accept.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT_ENCODING",pci->acceptenc.c_str());
-				spcgi.AddEnvironmentVar("HTTP_ACCEPT_LANGUAGE",pci->acceptlan.c_str());
-				spcgi.AddEnvironmentVar("HTTP_CONNECTION","close");
-
-				spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
-				spcgi.AddEnvironmentVar("REQUEST_URI",requri_enc.c_str());
-
-				spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
-				spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
-				spcgi.AddEnvironmentVar("REMOTE_HOST",address);
-				//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //pci->port
-				spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
-				spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
-
-				spcgi.AddEnvironmentVar("SERVER_NAME",psi->name.c_str());
-				//spcgi.AddEnvironmentVar("SERVER_ADDR","localhost");
-				//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
-				spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
-				spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
-
-				spcgi.AddEnvironmentVar("SCRIPT_NAME",pci->resource.c_str());
-				spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
-				spcgi.AddEnvironmentVar("DOCUMENT_ROOT",pci->root.c_str());
-				{
-					if(!spcgi.Open(pci->cgibin.c_str(),pci->cgiarg.c_str(),contentl,&spreq,&spres))
-						throw(StreamProtocolHTTPresponse::STATUS_500);
-					content = CONTENT_CGI;
-				}
-
-				//delayed response generation: cgi class handles this after checking the status feedback
-				//spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
-
-			}else
-			if(modsince != statbuf.st_mtime){
-				if(method != METHOD_HEAD){
-					if(!spfile.Open(path))
-						throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since the file was supposed to exist
-					content = CONTENT_FILE;
-				}
-
-				spres.AddHeader("Content-Type",pci->mimetype.c_str());
-				spres.FormatHeader("Content-Length","%lu",statbuf.st_size);
-				spres.FormatTime("Last-Modified",&statbuf.st_mtime);
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
-			}else{
-				//content = CONTENT_NONE;
-				spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
-			}
-
-			if(method == METHOD_POST && spcgi.datac < spcgi.datal){
-				//Receive rest of the POST if request packet didn't leak it already
-				psp = &spcgi;
-				state = STATE_RECV_DATA;
-				sflags = PROTOCOL_RECV; //re-enable EPOLLIN
-			}else
-			if(pci->cgi){
-				//In case of cgi, the response is integrated to content due to need to check the status feedback
-				psp = &spcgi;
-				state = STATE_SEND_DATA;
-				sflags = PROTOCOL_SEND;
-			}else{
-				psp = &spres;
-				state = STATE_SEND_RESPONSE;
-				sflags = PROTOCOL_SEND; //switch to EPOLLOUT
-			}
-
-		}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
-
-			if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400){
-				PageGen::HTTPError errorpage(&spdata);
-				errorpage.Generate(status,psi);
-
-				spres.AddHeader("Content-Type","text/html");
-				spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
-
-				if(method != METHOD_HEAD)
-					content = CONTENT_DATA;
-
-			}else spres.AddHeader("Content-Length","0"); //required
-
-			spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close"); //warning: possible double
-			spres.Generate(status);
-
-			//prepare the special/fail response
-			{
-				psp = &spres;
-				state = STATE_SEND_RESPONSE;
-				sflags = PROTOCOL_SEND;
-			}
-		}
-	}else
-	if(state == STATE_RECV_DATA){
-		if(spcgi.state == StreamProtocol::STATE_CLOSED)
-			return false;
-
-		psp = &spcgi;
-		state = STATE_SEND_DATA;
-		sflags = PROTOCOL_SEND;
-	}
-
-	return true;
-}
-
 void ClientProtocolHTTP::Reset(){
 	//Reset the client to the state of post-accept
 	psp = &spreq;
 	state = STATE_RECV_REQUEST;
 	sflags = PROTOCOL_RECV;
 
-	method = METHOD_GET;
+	method = StreamProtocolHTTPrequest::METHOD_GET;
 	content = CONTENT_NONE;
 	connection = CONNECTION_CLOSE;
 }
@@ -841,6 +572,296 @@ void ClientProtocolHTTP::Clear(){
 	spdata.Reset();
 	spfile.Reset();
 	spcgi.Reset();
+}
+
+bool ClientProtocolHTTP::Accept(){
+	try{
+		if(spreq.state == StreamProtocol::STATE_CORRUPTED)
+			throw(StreamProtocolHTTPresponse::STATUS_413); //or 400
+		else
+		if(spreq.state == StreamProtocol::STATE_CLOSED)
+			return false;
+
+		spreqstr = tbb_string(spreq.buffer.begin(),spreq.buffer.begin()+spreq.postl);
+
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html (HTTP/1.1 request)
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.5
+		lf = spreqstr.find("\r\n"); //Find the first CRLF. No newlines allowed in Request-Line
+		tbb_string request = spreqstr.substr(0,lf);
+
+		//parse the request line ----------------------------------------------------------------------------
+		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
+		static const uint ml[] = {5,4,5};
+		if(request.compare(0,ml[0],"HEAD ") == 0)
+			method = StreamProtocolHTTPrequest::METHOD_HEAD;
+		else
+		if(request.compare(0,ml[1],"GET ") == 0)
+			method = StreamProtocolHTTPrequest::METHOD_GET;
+		else
+		if(request.compare(0,ml[2],"POST ") == 0)
+			method = StreamProtocolHTTPrequest::METHOD_POST;
+		else{
+			//
+			throw(StreamProtocolHTTPresponse::STATUS_501);
+		}
+
+		size_t ru = request.find_first_not_of(" ",ml[method]);
+		if(ru == std::string::npos || request[ru] != '/')
+			throw(StreamProtocolHTTPresponse::STATUS_400);
+		size_t rl = request.find(' ',ru+1);
+		if(rl == std::string::npos)
+			throw(StreamProtocolHTTPresponse::STATUS_400);
+		size_t hv = request.find_first_not_of(" ",rl+1);
+		if(hv == std::string::npos || request.compare(hv,8,"HTTP/1.1") != 0)
+			throw(StreamProtocolHTTPresponse::STATUS_505);
+
+		requri_enc = request.substr(ru,rl-ru);
+		enclen = requri_enc.size();
+
+		//https://tools.ietf.org/html/rfc3986#section-3 (syntax components)
+		qv = requri_enc.find('?',0); //find the beginning of the query part
+		if(qv == std::string::npos)
+			qv = enclen;
+
+		tbb_string requri_dec = "/";
+		requri_dec.reserve(qv);
+		for(uint i = 1; i < qv; ++i){
+			if(requri_enc[i] == '%'){
+				if(i >= qv-2)
+					break;
+				tbb_string enc = requri_enc.substr(i+1,2);
+				ulong c = strtoul(enc.c_str(),0,16);
+				if(c != 0 && c < 256)
+					requri_dec += (char)c;
+				i += 2;
+			}else requri_dec += requri_enc[i];
+		}
+
+		//parse and remove dot (./..) segments
+		ParseSegments(requri_dec,pci->resource);
+
+		//parse the relevant headers ------------------------------------------------------------------------
+
+		//initialize or restore the default settings
+		pci->ResetConfig();
+
+		//tbb_string host, referer, useragent;
+		if(!ParseHeader(lf,spreqstr,"Host",pci->host))
+			throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
+		ParseHeader(lf,spreqstr,"Referer",pci->referer);
+		ParseHeader(lf,spreqstr,"Cookie",pci->cookie);
+		ParseHeader(lf,spreqstr,"User-Agent",pci->useragent);
+
+		char address[256] = "0.0.0.0";
+		socket.Identify(address,sizeof(address));
+
+		tbb_string hcnt;
+		if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
+			connection = CONNECTION_KEEPALIVE;
+		else connection = CONNECTION_CLOSE;
+
+		pci->uri = requri_enc;
+		pci->address = tbb_string(address);
+		ParseHeader(lf,spreqstr,"Accept",pci->accept);
+		ParseHeader(lf,spreqstr,"Accept-Encoding",pci->acceptenc);
+		ParseHeader(lf,spreqstr,"Accept-Language",pci->acceptlan);
+
+		status = StreamProtocolHTTPresponse::STATUS_200;
+
+	}catch(Protocol::StreamProtocolHTTPresponse::STATUS _status){
+
+		status = _status;
+	}
+
+	return true;
+}
+
+void ClientProtocolHTTP::Configure(){
+	if(status == StreamProtocolHTTPresponse::STATUS_200)
+		pci->Setup();
+}
+
+void ClientProtocolHTTP::Process(){
+	try{
+		if(status != StreamProtocolHTTPresponse::STATUS_200)
+			throw(status);
+
+		tbb_string locald = pci->root+pci->resource; //TODO: check the object type
+
+		if(pci->cgi)
+			connection = CONNECTION_CLOSE; //length of the content unknown
+		else
+		if(method == StreamProtocolHTTPrequest::METHOD_POST){
+			spres.AddHeader("Allow","GET,HEAD");
+			throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POST
+		}
+
+		const char *path = locald.c_str();
+
+		struct stat statbuf;
+		if(stat(path,&statbuf) == -1)
+			throw(StreamProtocolHTTPresponse::STATUS_404);
+
+		time_t modsince = ~0;
+		tbb_string hcnt;
+		if(ParseHeader(lf,spreqstr,"If-Modified-Since",hcnt)){
+			struct tm ti;
+			strptime(hcnt.c_str(),DATEFMT_RFC1123,&ti); //Assuming RFC1123 date format
+			modsince = timegm(&ti);
+		}
+		//also: If-Unmodified-Since for range requests
+
+		//generate the response -----------------------------------------------------------------------------
+
+		if(S_ISDIR(statbuf.st_mode)){
+			//Forward directory requests with /[uri] to /[uri]/
+			if(requri_enc.back() != '/'){
+				requri_enc += '/';
+				spres.FormatHeader("Location",requri_enc.c_str());
+				throw(StreamProtocolHTTPresponse::STATUS_303);
+			}
+
+			if(pci->index){
+				static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.py","index.pl","index.cgi"};
+				for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
+					tbb_string page = locald+pindex[i];
+					if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode)){
+						locald = page;
+						break;
+					}
+				}
+			}
+		}
+
+		spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close");
+
+		if(S_ISDIR(statbuf.st_mode)){
+			//index-file not present
+			//list the contents of this dir, if enabled
+			if(!pci->listing)
+				throw(StreamProtocolHTTPresponse::STATUS_404);
+
+			PageGen::HTTPListDir listdir(&spdata);
+			if(method != StreamProtocolHTTPrequest::METHOD_HEAD){
+				if(!listdir.Generate(locald.c_str(),pci->resource.c_str(),psi))
+					throw(StreamProtocolHTTPresponse::STATUS_500);
+				content = CONTENT_DATA;
+			}
+
+			spres.AddHeader("Content-Type","text/html");
+			spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
+			spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
+
+		}else
+		if(pci->cgi){
+			//https://tools.ietf.org/html/rfc3875
+			ulong contentl = 0;
+			if(method == StreamProtocolHTTPrequest::METHOD_POST){
+				if(!ParseHeader(lf,spreqstr,"Content-Length",hcnt) || !StrToUl(hcnt.c_str(),contentl))
+					throw(StreamProtocolHTTPresponse::STATUS_411);
+				spcgi.AddEnvironmentVar("CONTENT_LENGTH",hcnt.c_str());
+				if(!ParseHeader(lf,spreqstr,"Content-Type",hcnt))
+					hcnt.clear();//throw(StreamProtocolHTTPresponse::STATUS_400);
+				spcgi.AddEnvironmentVar("CONTENT_TYPE",hcnt.c_str());
+			}
+
+			//HTTP_COOKIE
+			spcgi.AddEnvironmentVar("HTTP_HOST",pci->host.c_str());
+			//spcgi.AddEnvironmentVar("HTTP_REFERER",pci->referer.c_str());
+			spcgi.AddEnvironmentVar("HTTP_USER_AGENT",pci->useragent.c_str());
+			spcgi.AddEnvironmentVar("HTTP_COOKIE",pci->cookie.c_str());
+			spcgi.AddEnvironmentVar("HTTP_ACCEPT",pci->accept.c_str());
+			spcgi.AddEnvironmentVar("HTTP_ACCEPT_ENCODING",pci->acceptenc.c_str());
+			spcgi.AddEnvironmentVar("HTTP_ACCEPT_LANGUAGE",pci->acceptlan.c_str());
+			spcgi.AddEnvironmentVar("HTTP_CONNECTION","close");
+
+			static const char *pmstr[] = {"HEAD","GET","POST"};
+			spcgi.AddEnvironmentVar("REQUEST_METHOD",pmstr[method]);
+			spcgi.AddEnvironmentVar("REQUEST_URI",requri_enc.c_str());
+
+			spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
+			spcgi.AddEnvironmentVar("REMOTE_ADDR","0.0.0.0");//spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
+			spcgi.AddEnvironmentVar("REMOTE_HOST","0.0.0.0");
+			//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //pci->port
+			spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
+			spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
+
+			spcgi.AddEnvironmentVar("SERVER_NAME",psi->name.c_str());
+			//spcgi.AddEnvironmentVar("SERVER_ADDR","localhost");
+			//spcgi.AddEnvironmentVar("SERVER_PORT","8080");
+			spcgi.AddEnvironmentVar("SERVER_PROTOCOL","HTTP/1.1");
+			spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
+
+			spcgi.AddEnvironmentVar("SCRIPT_NAME",pci->resource.c_str());
+			spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
+			spcgi.AddEnvironmentVar("DOCUMENT_ROOT",pci->root.c_str());
+			{
+				if(!spcgi.Open(pci->cgibin.c_str(),pci->cgiarg.c_str(),contentl,&spreq,&spres))
+					throw(StreamProtocolHTTPresponse::STATUS_500);
+				content = CONTENT_CGI;
+			}
+
+			//delayed response generation: cgi class handles this after checking the status feedback
+			//spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
+
+		}else
+		if(modsince != statbuf.st_mtime){
+			if(method != StreamProtocolHTTPrequest::METHOD_HEAD){
+				if(!spfile.Open(path))
+					throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since the file was supposed to exist
+				content = CONTENT_FILE;
+			}
+
+			spres.AddHeader("Content-Type",pci->mimetype.c_str());
+			spres.FormatHeader("Content-Length","%lu",statbuf.st_size);
+			spres.FormatTime("Last-Modified",&statbuf.st_mtime);
+			spres.Generate(StreamProtocolHTTPresponse::STATUS_200);
+		}else{
+			//content = CONTENT_NONE;
+			spres.Generate(StreamProtocolHTTPresponse::STATUS_304);
+		}
+
+		if(method == StreamProtocolHTTPrequest::METHOD_POST && spcgi.datac < spcgi.datal){
+			//Receive rest of the POST if request packet didn't leak it already
+			psp = &spcgi;
+			state = STATE_RECV_DATA;
+			sflags = PROTOCOL_RECV; //re-enable EPOLLIN
+		}else
+		if(pci->cgi){
+			//In case of cgi, the response is integrated to content due to need to check the status feedback
+			psp = &spcgi;
+			state = STATE_SEND_DATA;
+			sflags = PROTOCOL_SEND;
+		}else{
+			psp = &spres;
+			state = STATE_SEND_RESPONSE;
+			sflags = PROTOCOL_SEND; //switch to EPOLLOUT
+		}
+
+	}catch(Protocol::StreamProtocolHTTPresponse::STATUS status){
+
+		if(status >= Protocol::StreamProtocolHTTPresponse::STATUS_400){
+			PageGen::HTTPError errorpage(&spdata);
+			errorpage.Generate(status,psi);
+
+			spres.AddHeader("Content-Type","text/html");
+			spres.FormatHeader("Content-Length","%lu",spdata.buffer.size());
+
+			if(method != StreamProtocolHTTPrequest::METHOD_HEAD)
+				content = CONTENT_DATA;
+
+		}else spres.AddHeader("Content-Length","0"); //required
+
+		spres.AddHeader("Connection",connection == CONNECTION_KEEPALIVE?"keep-alive":"close"); //warning: possible double
+		spres.Generate(status);
+
+		//prepare the special/fail response
+		{
+			psp = &spres;
+			state = STATE_SEND_RESPONSE;
+			sflags = PROTOCOL_SEND;
+		}
+	}
 }
 
 void ClientProtocolHTTP::ParseSegments(tbb_string &uri, tbb_string &out){

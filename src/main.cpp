@@ -10,6 +10,8 @@
 
 #include <sys/epoll.h>
 
+#include <tbb/flow_graph.h>
+
 ServerInterface::ServerInterface() : name("tighttpd"), port(8080), tls(false){
 	//
 }
@@ -214,10 +216,8 @@ int main(int argc, const char **pargv){
 	event1.events = EPOLLIN;
 	epoll_ctl(efd,EPOLL_CTL_ADD,PythonServerManager::slist[0].first.fd,&event1);
 
-	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive work
+	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive (parallelized) work
 	for(;;){
-		//Run() parallel queue
-		//serial node for python execution?
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
 			PythonServerManager::SocketObjectPair *psop = 0;
 			for(uint j = 0, m = PythonServerManager::slist.size(); j < m; ++j){
@@ -303,13 +303,46 @@ int main(int argc, const char **pargv){
 			}
 		}
 
-		//wait for parallel queue
+//#define PARALLEL_QUEUE
+#ifdef PARALLEL_QUEUE
+		typedef std::pair<Protocol::ClientProtocol *, uint> FlowContent;
+		tbb::flow::graph fg;
+		tbb::flow::source_node<FlowContent> fgsrc(fg,[&](FlowContent &fc)->bool{
+			if(taskq.empty())
+				return false;
 
-		for(; !taskq.empty();){
 			Protocol::ClientProtocol *ptp = taskq.front();
 			uint sflags = ptp->GetFlags();
 
-			if(!ptp->Run()){
+			fc = FlowContent(ptp,sflags);
+			taskq.pop();
+
+			return true;
+		});
+
+		tbb::flow::function_node<FlowContent, FlowContent> fg_precfg(fg,tbb::flow::unlimited,[&](FlowContent fc)->FlowContent{
+			if(!fc.first->Accept())
+				fc.second = ~0u; //hack: indicate removal
+			return fc;
+		});
+
+		tbb::flow::function_node<FlowContent, FlowContent> fg_setup(fg,1,[&](FlowContent fc)->FlowContent{
+			if(fc.second != ~0u)
+				fc.first->Configure();
+			return fc;
+		});
+
+		tbb::flow::function_node<FlowContent, FlowContent> fg_postcfg(fg,tbb::flow::unlimited,[&](FlowContent fc)->FlowContent{
+			if(fc.second != ~0u)
+				fc.first->Process();
+			return fc;
+		});
+
+		tbb::flow::function_node<FlowContent> fg_sflags(fg,1,[&](FlowContent fc)->void{
+			Protocol::ClientProtocol *ptp = fc.first;
+			uint sflags = fc.second;
+
+			if(sflags == ~0u){
 				epoll_ctl(efd,EPOLL_CTL_DEL,ptp->GetSocket().fd,0);
 				delete ptp;
 			}else
@@ -320,9 +353,42 @@ int main(int argc, const char **pargv){
 					(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
 				epoll_ctl(efd,EPOLL_CTL_MOD,ptp->GetSocket().fd,&event1);
 			}
+		});
+
+		tbb::flow::make_edge(fgsrc,fg_precfg);
+		tbb::flow::make_edge(fg_precfg,fg_setup);
+		tbb::flow::make_edge(fg_setup,fg_postcfg);
+		tbb::flow::make_edge(fg_postcfg,fg_sflags);
+
+		fgsrc.activate();
+		fg.wait_for_all();
+
+
+#else
+		for(; !taskq.empty();){
+			Protocol::ClientProtocol *ptp = taskq.front();
+			uint sflags = ptp->GetFlags();
+
+			if(!ptp->Accept()){
+				epoll_ctl(efd,EPOLL_CTL_DEL,ptp->GetSocket().fd,0);
+				delete ptp;
+
+			}else{
+				ptp->Configure();
+				ptp->Process();
+
+				if(sflags != ptp->GetFlags()){
+					event1.data.ptr = ptp;
+					event1.events =
+						(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
+						(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
+					epoll_ctl(efd,EPOLL_CTL_MOD,ptp->GetSocket().fd,&event1);
+				}
+			}
 
 			taskq.pop();
 		}
+#endif
 	}
 
 	return 0;
