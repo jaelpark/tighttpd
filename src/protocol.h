@@ -42,7 +42,7 @@ public:
 	//Allows protocol implementation to do (quick) work once read/write finishes. Return true if there's intensive work for the queue.
 	virtual POLL Poll(uint) = 0;
 	//
-	virtual bool Accept() = 0;
+	virtual void Accept() = 0;
 	virtual void Configure() = 0;
 	virtual void Process() = 0;
 	//
@@ -71,7 +71,7 @@ public:
 		METHOD_COUNT, //just the total number
 	};
 	std::deque<char, tbb::cache_aligned_allocator<char>> buffer;
-	size_t postl; //POST leaking pointer
+	size_t postl; //POST leaking pointer, basically the first double-CRLF in the request
 	static const char *pmethodstr[METHOD_COUNT];
 };
 
@@ -98,7 +98,7 @@ public:
 		STATUS_505, //HTTP version not supported
 		STATUS_COUNT
 	};
-	void Generate(const char *, bool = true); //Generate the final response buffer with the given status and headers
+	void Generate(const char *, bool = true);
 	void Generate(STATUS, bool = true);
 	void AddHeader(const char *, const char *);
 	void FormatHeader(const char *, const char *, ...);
@@ -165,7 +165,7 @@ public:
 	StreamProtocol * GetStream() const;
 	POLL Poll(uint);
 	//
-	bool Accept();
+	void Accept();
 	void Configure();
 	void Process();
 	//
@@ -175,7 +175,7 @@ protected:
 	//
 	ServerInterface *psi;
 	ClientInterface *pci;
-	boost::python::object clobj; //this is here just to keep the object alive
+	boost::python::object clobj; //this is here just to keep the class object alive
 	//
 	StreamProtocolHTTPrequest spreq;
 	StreamProtocolHTTPresponse spres;
@@ -184,13 +184,13 @@ protected:
 	StreamProtocolCgi spcgi;
 	//TODO: timeout timer
 
-	//
+	//Some state variables shared between Accept/Configure/Process
 	StreamProtocolHTTPresponse::STATUS status;
-	tbb_string spreqstr;
-	tbb_string requri_enc;
-	size_t enclen;
-	size_t lf;
-	size_t qv;
+	tbb_string spreqstr; //whole request buffer given by the Accept() here
+	tbb_string requri_enc; //encoded request uri
+	size_t enclen; //encoded request uri length
+	size_t lf; //End position of the first line in the request
+	size_t qv; //Query string position in the encoded uri
 	//
 	enum STATE{
 		STATE_RECV_REQUEST,
@@ -204,14 +204,14 @@ protected:
 	enum CONNECTION{
 		CONNECTION_CLOSE,
 		CONNECTION_KEEPALIVE
-	} connection;
+	} connection; //persistent or non-persistent connection
 
 	enum CONTENT{
 		CONTENT_NONE,
 		CONTENT_DATA,
 		CONTENT_FILE,
 		CONTENT_CGI
-	} content;
+	} content; //type of the requested content
 
 public:
 	//utils

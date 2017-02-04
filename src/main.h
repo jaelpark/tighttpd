@@ -19,9 +19,7 @@ public:
 	virtual ~ServerInterface();
 	virtual void Setup();
 	virtual boost::python::object Accept();
-	//void ResetConfig(); //reset client config
 	//
-	//server config variables
 	//std::string software;
 	tbb_string name;
 	uint port;

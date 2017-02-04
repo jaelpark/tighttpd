@@ -59,7 +59,7 @@ bool StreamProtocolHTTPrequest::Read(){
 	ssize_t len = socket.Recv(buffer1,sizeof(buffer1));
 
 	if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
-		state = STATE_CLOSED; //Some error occurred or socket was closed
+		state = STATE_CLOSED; //Some error occurred or the socket was closed
 		return true;
 	}
 
@@ -78,19 +78,20 @@ bool StreamProtocolHTTPrequest::Read(){
 }
 
 bool StreamProtocolHTTPrequest::Write(){
-	//nothing to send
 	return false;
 }
 
+//Reset the request data to the state of a new client
 void StreamProtocolHTTPrequest::Reset(){
 	state = STATE_PENDING;
-	//buffer.clear();
+	//Remove the contents of the request up to the POST data or next request. This is to support pipelining properly.
 	buffer.erase(buffer.begin(),buffer.begin()+postl);
 }
 
+//Upon calling Reset(), checks if there are pending (intact) requests in the buffer.
 bool StreamProtocolHTTPrequest::CheckPipeline(){
 	if(buffer.size() >= 4 && ClientProtocolHTTP::FindBreak(&buffer,&postl)){
-		state = STATE_SUCCESS;
+		state = STATE_SUCCESS; //Request has been received, we can skip that part next time
 		return true;
 	}
 
@@ -112,10 +113,10 @@ StreamProtocolHTTPresponse::~StreamProtocolHTTPresponse(){
 }
 
 bool StreamProtocolHTTPresponse::Read(){
-	//nothing to recv
 	return false;
 }
 
+//Send the response (or part of it) to the client. Returns true when everything has been sent.
 bool StreamProtocolHTTPresponse::Write(){
 	tbb_string spresstr(buffer.begin(),buffer.end());
 	ssize_t res = spresstr.size();
@@ -135,11 +136,13 @@ bool StreamProtocolHTTPresponse::Write(){
 	return false;
 }
 
+//Reset the response data to the state of a new client
 void StreamProtocolHTTPresponse::Reset(){
 	state = STATE_PENDING;
 	buffer.clear();
 }
 
+//Generate the response content: format it from the given request lines
 void StreamProtocolHTTPresponse::Generate(const char *pstatus, bool crlf){
 	char buffer1[4096];
 	size_t len;
@@ -157,14 +160,15 @@ void StreamProtocolHTTPresponse::Generate(const char *pstatus, bool crlf){
 	if(!crlf)
 		return;
 
-	static const char *pclrf = "\r\n";
-	buffer.insert(buffer.end(),pclrf,pclrf+2);
+	static const char *pcrlf = "\r\n";
+	buffer.insert(buffer.end(),pcrlf,pcrlf+2);
 }
 
 void StreamProtocolHTTPresponse::Generate(STATUS status, bool crlf){
 	Generate(pstatstr[status],crlf);
 }
 
+//Prepare a response header before the response is generated
 void StreamProtocolHTTPresponse::AddHeader(const char *pname, const char *pfield){
 	char buffer1[4096];
 	size_t len = snprintf(buffer1,sizeof(buffer1),"%s: %s\r\n",pname,pfield);
@@ -180,6 +184,7 @@ void StreamProtocolHTTPresponse::FormatHeader(const char *pname, const char *pfm
 	AddHeader(pname,buffer1);
 }
 
+//Format and prepare a time string header (Last-Modified, for example)
 void StreamProtocolHTTPresponse::FormatTime(const char *pname, time_t *prt){
 	char buffer1[4096];
 	const struct tm *pti = gmtime(prt);
@@ -210,6 +215,7 @@ StreamProtocolData::~StreamProtocolData(){
 	//
 }
 
+//Send (possibly automatically generated) data buffer (or part of it).
 bool StreamProtocolData::Write(){
 	tbb_string spresstr(buffer.begin(),buffer.end());
 	ssize_t res = spresstr.size();
@@ -250,6 +256,7 @@ StreamProtocolFile::~StreamProtocolFile(){
 	//
 }
 
+//Send a file (or part of it)
 bool StreamProtocolFile::Write(){
 	char buffer1[4096];
 	ssize_t res = fread(buffer1,1,sizeof(buffer1),pf);
@@ -285,8 +292,10 @@ void StreamProtocolFile::Reset(){
 }
 
 bool StreamProtocolFile::Open(const char *path){
+	//fopen failing may not be a sufficient check in case of directories. However, the type of the file is checked before Open().
+	//It's unlikely to change between these two operations.
 	if(!(pf = fopen(path,"rb")))
-		return false; //may not be sufficient check in case of directories
+		return false;
 	fseek(pf,0,SEEK_END);
 	len = ftell(pf);
 	fseek(pf,0,SEEK_SET);
@@ -302,6 +311,8 @@ StreamProtocolCgi::~StreamProtocolCgi(){
 	//
 }
 
+//Read data from a CGI pipe and send it immediately afterwards. As with the rest of Write() methods, returns true
+//when the pipe is closed and no more data is to be read and sent.
 bool StreamProtocolCgi::Write(){
 	char buffer1[4096];
 	errno = 0;
@@ -314,7 +325,7 @@ bool StreamProtocolCgi::Write(){
 		struct timespec ts1;
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts1);
 		long dt = ts1.tv_nsec-ts.tv_nsec;
-		if(dt < 5e9)
+		if(dt < 5e9) //TODO: user defined CGI timeout
 			return false;
 		state = STATE_SUCCESS;
 		return true;
@@ -322,16 +333,18 @@ bool StreamProtocolCgi::Write(){
 
 	errno = 0;
 
-	//
+	//feedback == false -> no double-CRLF encountered, yet
 	if(!feedback){
+		//Some of the output has to be checked in case of any status headers. CGI scripter may manually assign the HTTP response status.
+		//Until double-CRLF is found, data has to be buffered.
 		buffer.insert(buffer.end(),buffer1,buffer1+res);
 
 		size_t postl;
 		if(ClientProtocolHTTP::FindBreak(&buffer,&postl)){
 			tbb_string feedbstr(buffer.begin(),buffer.begin()+postl), status;
 			if(ClientProtocolHTTP::ParseHeader(0,"\r\n"+feedbstr,"Status",status))
-				pres->Generate(status.c_str(),false);
-			else pres->Generate(Protocol::StreamProtocolHTTPresponse::STATUS_200,false);
+				pres->Generate(status.c_str(),false); //if 'Status' was found, generate the response with it
+			else pres->Generate(Protocol::StreamProtocolHTTPresponse::STATUS_200,false); //otherwise return 200. This has to be fixed for user error pages
 
 			//TODO: Check if Content-Length is given. If the amount of data read is small, it can also be determined here so that
 			//persistent connection can be used.
@@ -343,6 +356,8 @@ bool StreamProtocolCgi::Write(){
 	}
 
 	if(feedback){
+		//Before reading any new content from the pipe, empty the buffer. The buffer fills up when initially searching the status feedback
+		//or when send() failed to deliver everything.
 		if(buffer.size() > 0){
 			tbb_string spresstr(buffer.begin(),buffer.end());
 			ssize_t len = socket.Send(spresstr.c_str(),spresstr.size());
@@ -365,11 +380,13 @@ bool StreamProtocolCgi::Write(){
 		}
 	}
 
-	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts); //update the CGI timeout counter
 
 	return false;
 }
 
+//Receive POST data (the remaining that did not come with the request packet) and write it to CGI pipe. Returns true when everything has been
+//received that written.
 bool StreamProtocolCgi::Read(){
 	char buffer1[4096];
 	ssize_t len = socket.Recv(buffer1,sizeof(buffer1));
@@ -384,11 +401,13 @@ bool StreamProtocolCgi::Read(){
 
 	size_t leak = 0;
 	if(datac > datal){
+		//Any excess data is buffered for the POST pipelining - when CGI Content-Length is supported. Currently this is useless.
 		leak = datac-datal;
-		preq->buffer.insert(preq->buffer.end(),buffer1+len-leak,buffer1+len); //POST pipelining
+		preq->buffer.insert(preq->buffer.end(),buffer1+len-leak,buffer1+len);
 	}
 
-	write(pipefdo[1],buffer1,len-leak); //assume that the pipe is available for writing
+	//Assume that the pipe is available for writing. We don't check the number of bytes written.
+	write(pipefdo[1],buffer1,len-leak);
 
 	if(datac >= datal){
 		close(pipefdo[1]);
@@ -396,11 +415,13 @@ bool StreamProtocolCgi::Read(){
 		return true;
 	}
 
+	//update the CGI read timeout counter, in case the next write round will be the last.
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
 
 	return false;
 }
 
+//Clear the buffers and close the pipes (in case they're still hanging)
 void StreamProtocolCgi::Reset(){
 	state = STATE_PENDING;
 	feedback = false;
@@ -421,6 +442,7 @@ void StreamProtocolCgi::AddEnvironmentVar(const char *pname, const char *pconten
 	envptr.push_back(&(*m));
 }
 
+//Spawn the CGI child process and write any possible (partial) POST data that came with the request
 bool StreamProtocolCgi::Open(const char *pcgibin, const char *pcgiarg, size_t _datal, StreamProtocolHTTPrequest *_preq, StreamProtocolHTTPresponse *_pres){
 	envptr.push_back(0);
 
@@ -445,7 +467,7 @@ bool StreamProtocolCgi::Open(const char *pcgibin, const char *pcgiarg, size_t _d
 	close(pipefdo[0]);
 	close(pipefdi[1]);
 
-	fcntl(pipefdi[0],F_SETFL,fcntl(pipefdi[0],F_GETFL,0)|O_NONBLOCK);
+	fcntl(pipefdi[0],F_SETFL,fcntl(pipefdi[0],F_GETFL,0)|O_NONBLOCK); //non-blocking pipe
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
 	preq = _preq;
@@ -454,14 +476,15 @@ bool StreamProtocolCgi::Open(const char *pcgibin, const char *pcgiarg, size_t _d
 	datal = _datal;
 
 	if(preq->postl < preq->buffer.size()){
-		//Some of the POST packets already received
+		//Some of the POST data has already been received. Get it from the request instance and write it here.
 		tbb_string leakstr(preq->buffer.begin()+preq->postl,preq->buffer.end());
 		datac = leakstr.size();
 
 		size_t leak = 0;
 		if(datac > datal){
+			//All of POST was in the request buffer. This may also contain something from the
+			//next request - again some pipelining considerations.
 			leak = datac-datal;
-			//
 		}
 
 		write(pipefdo[1],leakstr.c_str(),datac-leak); //TODO: leakwrite
@@ -484,17 +507,23 @@ ClientProtocolHTTP::~ClientProtocolHTTP(){
 }
 
 ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
-	//main HTTP state machine
-	if(sflag1 == PROTOCOL_ACCEPT)
-		return POLL_SKIP; //SM already initialized
+	//Main HTTP state machine. Check the state and according to the HTTP protocol, decide what to do next. Here a specific
+	//state means that the operation corresponding to it has just been completed.
 
-	//no need to check sflags, since only either PROTOCOL_SEND or RECV is enabled according to current state
+	if(sflag1 == PROTOCOL_ACCEPT)
+		return POLL_SKIP; //State machine for this client already initialized
+
+	//No need to check sflags (the epoll flags driver), since only either PROTOCOL_SEND or RECV is enabled according to current state
 	if(state == STATE_RECV_REQUEST){
-		sflags = 0; //do not expect traffic until request has been processed
-		return POLL_RUN; //handle the request in parallel Run()
+		if(spreq.state == StreamProtocol::STATE_CLOSED)
+			return POLL_CLOSE;
+
+		sflags = 0; //Do not expect any traffic until the request has been processed
+		return POLL_RUN; //Handle the request in the parallelizable Run()
 
 	}else
 	if(state == STATE_RECV_DATA){
+		//A long POST just finished arriving. Prepare to read the CGI pipe.
 		if(spcgi.state == StreamProtocol::STATE_CLOSED)
 			return POLL_CLOSE;
 
@@ -508,12 +537,11 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			Clear();
 			if(connection == CONNECTION_KEEPALIVE){
 				Reset();
-				//check pipelined requests and move to process them immediately if present
+				//Check pipelined requests and move to process them immediately if present
 				if(spreq.CheckPipeline()){
 					sflags = 0;
 					return POLL_RUN;
 				}
-				//TODO: POST leak to next request
 				return POLL_SKIP;
 			}else return POLL_CLOSE;
 		}
@@ -530,11 +558,12 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 			break;
 		}
 		state = STATE_SEND_DATA;
-		//sflags = PROTOCOL_SEND; //keep sending
+		//sflags = PROTOCOL_SEND; //keep sending (already set)
 
 		return POLL_SKIP;
 	}else
 	if(state == STATE_SEND_DATA){
+		//Data, file or whatever just finished uploading
 		{
 			Clear();
 			if(connection == CONNECTION_KEEPALIVE){
@@ -546,8 +575,6 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 				return POLL_SKIP;
 			}else return POLL_CLOSE;
 		}
-
-		//return POLL_SKIP;
 	}
 
 	//default queries
@@ -574,13 +601,12 @@ void ClientProtocolHTTP::Clear(){
 	spcgi.Reset();
 }
 
-bool ClientProtocolHTTP::Accept(){
+//After the request has completely arrived, we move to process it. This is the thread-safe
+//request parsing part right before the Python script configuration.
+void ClientProtocolHTTP::Accept(){
 	try{
 		if(spreq.state == StreamProtocol::STATE_CORRUPTED)
 			throw(StreamProtocolHTTPresponse::STATUS_413); //or 400
-		else
-		if(spreq.state == StreamProtocol::STATE_CLOSED)
-			return false;
 
 		spreqstr = tbb_string(spreq.buffer.begin(),spreq.buffer.begin()+spreq.postl);
 
@@ -590,6 +616,7 @@ bool ClientProtocolHTTP::Accept(){
 		tbb_string request = spreqstr.substr(0,lf);
 
 		//parse the request line ----------------------------------------------------------------------------
+
 		//https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html (methods)
 		static const uint ml[] = {5,4,5};
 		if(request.compare(0,ml[0],"HEAD ") == 0)
@@ -619,10 +646,11 @@ bool ClientProtocolHTTP::Accept(){
 		enclen = requri_enc.size();
 
 		//https://tools.ietf.org/html/rfc3986#section-3 (syntax components)
-		qv = requri_enc.find('?',0); //find the beginning of the query part
+		qv = requri_enc.find('?',0); //find the beginning of the query string
 		if(qv == std::string::npos)
 			qv = enclen;
 
+		//Very basic uri decoding. Needs a better version to support more cases.
 		tbb_string requri_dec = "/";
 		requri_dec.reserve(qv);
 		for(uint i = 1; i < qv; ++i){
@@ -645,7 +673,6 @@ bool ClientProtocolHTTP::Accept(){
 		//initialize or restore the default settings
 		pci->ResetConfig();
 
-		//tbb_string host, referer, useragent;
 		if(!ParseHeader(lf,spreqstr,"Host",pci->host))
 			throw(StreamProtocolHTTPresponse::STATUS_400); //always required by the 1.1 standard
 		ParseHeader(lf,spreqstr,"Referer",pci->referer);
@@ -670,26 +697,27 @@ bool ClientProtocolHTTP::Accept(){
 
 	}catch(Protocol::StreamProtocolHTTPresponse::STATUS _status){
 
+		//catch reserved
 		status = _status;
 	}
-
-	return true;
 }
 
+//Execute the client configuration python script. Not thread-safe.
 void ClientProtocolHTTP::Configure(){
 	if(status == StreamProtocolHTTPresponse::STATUS_200)
 		pci->Setup();
 }
 
+//Process the request: open the file or pipe, or generate the content.
 void ClientProtocolHTTP::Process(){
 	try{
 		if(status != StreamProtocolHTTPresponse::STATUS_200)
-			throw(status);
+			throw(status); //forward the status from Accept() if not 200
 
 		tbb_string locald = pci->root+pci->resource; //TODO: check the object type
 
 		if(pci->cgi)
-			connection = CONNECTION_CLOSE; //length of the content unknown
+			connection = CONNECTION_CLOSE; //Length of the content unknown, for now. Might be fixed later.
 		else
 		if(method == StreamProtocolHTTPrequest::METHOD_POST){
 			spres.AddHeader("Allow","GET,HEAD");
@@ -780,8 +808,8 @@ void ClientProtocolHTTP::Process(){
 			spcgi.AddEnvironmentVar("REQUEST_URI",requri_enc.c_str());
 
 			spcgi.AddEnvironmentVar("GATEWAY_INTERFACE","CGI/1.1");
-			spcgi.AddEnvironmentVar("REMOTE_ADDR","0.0.0.0");//spcgi.AddEnvironmentVar("REMOTE_ADDR",address);
-			spcgi.AddEnvironmentVar("REMOTE_HOST","0.0.0.0");
+			spcgi.AddEnvironmentVar("REMOTE_ADDR",pci->address.c_str());
+			spcgi.AddEnvironmentVar("REMOTE_HOST",pci->address.c_str());
 			//spcgi.AddEnvironmentVar("REMOTE_PORT","8080"); //pci->port
 			spcgi.AddEnvironmentVar("QUERY_STRING",qv != enclen?requri_enc.substr(qv+1).c_str():"");
 			spcgi.AddEnvironmentVar("REDIRECT_STATUS","200");
@@ -801,7 +829,7 @@ void ClientProtocolHTTP::Process(){
 				content = CONTENT_CGI;
 			}
 
-			//delayed response generation: cgi class handles this after checking the status feedback
+			//Delayed response generation: cgi class handles this after checking the status feedback
 			//spres.Generate(StreamProtocolHTTPresponse::STATUS_200,false);
 
 		}else
@@ -828,7 +856,7 @@ void ClientProtocolHTTP::Process(){
 			sflags = PROTOCOL_RECV; //re-enable EPOLLIN
 		}else
 		if(pci->cgi){
-			//In case of cgi, the response is integrated to content due to need to check the status feedback
+			//In case of cgi, the response is integrated to the content due to need to check the status feedback
 			psp = &spcgi;
 			state = STATE_SEND_DATA;
 			sflags = PROTOCOL_SEND;
@@ -915,6 +943,7 @@ void ClientProtocolHTTP::ParseSegments(tbb_string &uri, tbb_string &out){
 	}
 }
 
+//Find and return the contents of a request header line. A format "\r\nHeader: Data" is assumed.
 bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, const tbb_string &header, tbb_string &content){
 	size_t hs = spreqstr.find("\r\n"+header+": ",lf);
 	if(hs == std::string::npos)
@@ -928,6 +957,7 @@ bool ClientProtocolHTTP::ParseHeader(size_t lf, const tbb_string &spreqstr, cons
 	return true;
 }
 
+//Convert string to unsigned long with some additional checks.
 bool ClientProtocolHTTP::StrToUl(const char *pstr, ulong &ul){
 	char *pendptr = 0;
 	errno = 0;
@@ -936,6 +966,7 @@ bool ClientProtocolHTTP::StrToUl(const char *pstr, ulong &ul){
 	return !(errno == ERANGE || *pendptr != 0 || pstr == pendptr);
 }
 
+//Find double-CRLF from the text buffer
 bool ClientProtocolHTTP::FindBreak(const std::deque<char, tbb::cache_aligned_allocator<char>> *pbuffer, size_t *pp){
 	for(uint i = 0, n = pbuffer->size()-3; i < n; ++i){
 		if((*pbuffer)[i+0] == '\r' && (*pbuffer)[i+1] == '\n' &&

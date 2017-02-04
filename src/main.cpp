@@ -219,6 +219,7 @@ int main(int argc, const char **pargv){
 	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive (parallelized) work
 	for(;;){
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
+			//Find the corresponding server instance for this event, unless it's a client event
 			PythonServerManager::SocketObjectPair *psop = 0;
 			for(uint j = 0, m = PythonServerManager::slist.size(); j < m; ++j){
 				if(events[i].data.ptr == &PythonServerManager::slist[j]){
@@ -227,6 +228,7 @@ int main(int argc, const char **pargv){
 				}
 			}
 			if(psop){
+				//Server socket event, incoming connection
 				for(;;){
 					Socket::ClientSocket client(psop->first.Accept());
 					if(client.fd == -1)
@@ -321,20 +323,17 @@ int main(int argc, const char **pargv){
 		});
 
 		tbb::flow::function_node<FlowContent, FlowContent> fg_precfg(fg,tbb::flow::unlimited,[&](FlowContent fc)->FlowContent{
-			if(!fc.first->Accept())
-				fc.second = ~0u; //hack: indicate removal
+			fc.first->Accept();
 			return fc;
 		});
 
 		tbb::flow::function_node<FlowContent, FlowContent> fg_setup(fg,1,[&](FlowContent fc)->FlowContent{
-			if(fc.second != ~0u)
-				fc.first->Configure();
+			fc.first->Configure();
 			return fc;
 		});
 
 		tbb::flow::function_node<FlowContent, FlowContent> fg_postcfg(fg,tbb::flow::unlimited,[&](FlowContent fc)->FlowContent{
-			if(fc.second != ~0u)
-				fc.first->Process();
+			fc.first->Process();
 			return fc;
 		});
 
@@ -342,10 +341,6 @@ int main(int argc, const char **pargv){
 			Protocol::ClientProtocol *ptp = fc.first;
 			uint sflags = fc.second;
 
-			if(sflags == ~0u){
-				epoll_ctl(efd,EPOLL_CTL_DEL,ptp->GetSocket().fd,0);
-				delete ptp;
-			}else
 			if(sflags != ptp->GetFlags()){
 				event1.data.ptr = ptp;
 				event1.events =
@@ -369,21 +364,16 @@ int main(int argc, const char **pargv){
 			Protocol::ClientProtocol *ptp = taskq.front();
 			uint sflags = ptp->GetFlags();
 
-			if(!ptp->Accept()){
-				epoll_ctl(efd,EPOLL_CTL_DEL,ptp->GetSocket().fd,0);
-				delete ptp;
+			ptp->Accept();
+			ptp->Configure();
+			ptp->Process();
 
-			}else{
-				ptp->Configure();
-				ptp->Process();
-
-				if(sflags != ptp->GetFlags()){
-					event1.data.ptr = ptp;
-					event1.events =
-						(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
-						(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
-					epoll_ctl(efd,EPOLL_CTL_MOD,ptp->GetSocket().fd,&event1);
-				}
+			if(sflags != ptp->GetFlags()){
+				event1.data.ptr = ptp;
+				event1.events =
+					(ptp->GetFlags() & PROTOCOL_RECV?EPOLLIN:0)|
+					(ptp->GetFlags() & PROTOCOL_SEND?EPOLLOUT:0);
+				epoll_ctl(efd,EPOLL_CTL_MOD,ptp->GetSocket().fd,&event1);
 			}
 
 			taskq.pop();
