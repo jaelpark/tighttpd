@@ -724,10 +724,8 @@ void ClientProtocolHTTP::Process(){
 			throw(StreamProtocolHTTPresponse::STATUS_405); //only scripts shall accept POST
 		}
 
-		const char *path = locald.c_str();
-
 		struct stat statbuf;
-		if(stat(path,&statbuf) == -1)
+		if(stat(locald.c_str(),&statbuf) == -1)
 			throw(StreamProtocolHTTPresponse::STATUS_404);
 
 		time_t modsince = ~0;
@@ -795,7 +793,7 @@ void ClientProtocolHTTP::Process(){
 
 			//HTTP_COOKIE
 			spcgi.AddEnvironmentVar("HTTP_HOST",pci->host.c_str());
-			//spcgi.AddEnvironmentVar("HTTP_REFERER",pci->referer.c_str());
+			spcgi.AddEnvironmentVar("HTTP_REFERER",pci->referer.c_str());
 			spcgi.AddEnvironmentVar("HTTP_USER_AGENT",pci->useragent.c_str());
 			spcgi.AddEnvironmentVar("HTTP_COOKIE",pci->cookie.c_str());
 			spcgi.AddEnvironmentVar("HTTP_ACCEPT",pci->accept.c_str());
@@ -821,7 +819,7 @@ void ClientProtocolHTTP::Process(){
 			spcgi.AddEnvironmentVar("SERVER_SOFTWARE","tighttpd/0.1");
 
 			spcgi.AddEnvironmentVar("SCRIPT_NAME",pci->resource.c_str());
-			spcgi.AddEnvironmentVar("SCRIPT_FILENAME",path);
+			spcgi.AddEnvironmentVar("SCRIPT_FILENAME",locald.c_str());
 			spcgi.AddEnvironmentVar("DOCUMENT_ROOT",pci->root.c_str());
 			{
 				if(!spcgi.Open(pci->cgibin.c_str(),pci->cgiarg.c_str(),contentl,&spreq,&spres))
@@ -835,7 +833,7 @@ void ClientProtocolHTTP::Process(){
 		}else
 		if(modsince != statbuf.st_mtime){
 			if(method != StreamProtocolHTTPrequest::METHOD_HEAD){
-				if(!spfile.Open(path))
+				if(!spfile.Open(locald.c_str()))
 					throw(StreamProtocolHTTPresponse::STATUS_500); //send 500 since the file was supposed to exist
 				content = CONTENT_FILE;
 			}
