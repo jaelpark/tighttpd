@@ -7,6 +7,8 @@ namespace Protocol{
 #define PROTOCOL_SEND 0x2
 #define PROTOCOL_ACCEPT 0x4
 
+//Communication interface for specific data sources (file, data, pipe) for sending and targets for receiving. Implementations should also
+//handle rules determining when the data transfer is complete, for example.
 class StreamProtocol{
 public:
 	StreamProtocol(Socket::ClientSocket);

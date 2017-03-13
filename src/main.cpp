@@ -10,7 +10,9 @@
 
 #include <sys/epoll.h>
 
+#ifdef USE_MT
 #include <tbb/flow_graph.h>
+#endif
 
 ServerInterface::ServerInterface() : name("tighttpd"), port(8080), tls(false){
 	//
@@ -305,8 +307,7 @@ int main(int argc, const char **pargv){
 			}
 		}
 
-//#define PARALLEL_QUEUE
-#ifdef PARALLEL_QUEUE
+#ifdef USE_MT
 		typedef std::pair<Protocol::ClientProtocol *, uint> FlowContent;
 		tbb::flow::graph fg;
 		tbb::flow::source_node<FlowContent> fgsrc(fg,[&](FlowContent &fc)->bool{
