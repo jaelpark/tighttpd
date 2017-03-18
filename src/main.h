@@ -40,6 +40,7 @@ public:
 	tbb_string cgiarg;
 	bool index;
 	bool listing;
+	bool deny;
 	bool cgi;
 	//client constants
 	tbb_string host;

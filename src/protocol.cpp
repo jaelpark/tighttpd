@@ -728,6 +728,9 @@ void ClientProtocolHTTP::Process(){
 		if(stat(locald.c_str(),&statbuf) == -1)
 			throw(StreamProtocolHTTPresponse::STATUS_404);
 
+		if(pci->deny)
+			throw(StreamProtocolHTTPresponse::STATUS_403);
+
 		time_t modsince = ~0;
 		tbb_string hcnt;
 		if(ParseHeader(lf,spreqstr,"If-Modified-Since",hcnt)){

@@ -43,6 +43,7 @@ void ClientInterface::ResetConfig(){
 	mimetype = "application/octet-stream";
 	index = false;
 	listing = true;
+	deny = false;
 	cgi = false;
 }
 
@@ -151,6 +152,7 @@ BOOST_PYTHON_MODULE(HttpModule){
 		.add_property("cgiarg",make_getter_c1(cgiarg),make_setter_c1(cgiarg))
 		.def_readwrite("index",&ClientInterface::index)
 		.def_readwrite("listing",&ClientInterface::listing)
+		.def_readwrite("deny",&ClientInterface::deny)
 		.def_readwrite("cgi",&ClientInterface::cgi)
 		//client constants
 		.add_property("host",make_getter_c1(host))
