@@ -683,9 +683,9 @@ void ClientProtocolHTTP::Accept(){
 		socket.Identify(address,sizeof(address));
 
 		tbb_string hcnt;
-		if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,10,"keep-alive") == 0)
-			connection = CONNECTION_KEEPALIVE;
-		else connection = CONNECTION_CLOSE;
+		if(ParseHeader(lf,spreqstr,"Connection",hcnt) && hcnt.compare(0,5,"close") == 0)
+			connection = CONNECTION_CLOSE;
+		else connection = CONNECTION_KEEPALIVE;
 
 		pci->uri = requri_enc;
 		pci->address = tbb_string(address);
