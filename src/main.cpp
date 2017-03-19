@@ -180,8 +180,10 @@ int main(int argc, const char **pargv){
 	Py_Initialize();
 
 	FILE *pf = fopen(pargv[1],"rb");
-	if(!pf)
+	if(!pf){
+		DebugPrintf("Config %s not found. Exiting...\n",pargv[1]);
 		return 0;
+	}
 	PyRun_SimpleFile(pf,"config.py");
 	fclose(pf);
 

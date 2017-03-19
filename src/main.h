@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <string.h> //strerror etc.
 
+#include <deque>
+#include <queue>
+
 #include <tbb/tbb.h>
 
 #include <boost/python.hpp>
