@@ -42,7 +42,7 @@ void ClientInterface::ResetConfig(){
 	root = ".";
 	mimetype = "application/octet-stream";
 	index = false;
-	listing = true;
+	listing = false;
 	deny = false;
 	cgi = false;
 }
