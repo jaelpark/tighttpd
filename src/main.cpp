@@ -74,6 +74,9 @@ ClientInterface::~ClientInterface(){
 void ClientInterface::ResetConfig(){
 	root = ".";
 	mimetype = "application/octet-stream";
+#ifdef USE_CUSTOMDIRINDEX
+	indexfile = "index.html";
+#endif
 	index = false;
 	listing = false;
 	deny = false;
@@ -181,6 +184,9 @@ BOOST_PYTHON_MODULE(HttpModule){
 		.add_property("root",make_getter_c1(root),make_setter_c1(root))
 		.add_property("resource",make_getter_c1(resource),make_setter_c1(resource))
 		.add_property("mimetype",make_getter_c1(mimetype),make_setter_c1(mimetype))
+#ifdef USE_CUSTOMDIRINDEX
+		.add_property("indexfile",make_getter_c1(indexfile),make_setter_c1(indexfile))
+#endif
 		.add_property("cgibin",make_getter_c1(cgibin),make_setter_c1(cgibin))
 		.add_property("cgiarg",make_getter_c1(cgiarg),make_setter_c1(cgiarg))
 		.def_readwrite("index",&ClientInterface::index)

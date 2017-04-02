@@ -72,6 +72,9 @@ public:
 	tbb_string root;
 	tbb_string resource;
 	tbb_string mimetype;
+#ifdef USE_CUSTOMDIRINDEX
+	tbb_string indexfile;
+#endif
 	tbb_string cgibin;
 	tbb_string cgiarg;
 	bool index;

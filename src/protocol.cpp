@@ -784,6 +784,11 @@ void ClientProtocolHTTP::Process(){
 			}
 
 			if(pci->index){
+#ifdef USE_CUSTOMDIRINDEX
+				tbb_string page = locald+pci->indexfile;
+				if(stat(page.c_str(),&statbuf) != -1 && !S_ISDIR(statbuf.st_mode))
+					locald = page;
+#else
 				static const char *pindex[] = {"index.html","index.htm","index.shtml","index.php","index.py","index.pl","index.cgi"};
 				for(uint i = 0, n = sizeof(pindex)/sizeof(pindex[0]); i < n; ++i){
 					tbb_string page = locald+pindex[i];
@@ -792,6 +797,7 @@ void ClientProtocolHTTP::Process(){
 						break;
 					}
 				}
+#endif
 			}
 		}
 
