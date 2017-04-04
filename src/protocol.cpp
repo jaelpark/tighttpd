@@ -777,8 +777,8 @@ void ClientProtocolHTTP::Process(){
 
 		if(S_ISDIR(statbuf.st_mode)){
 			//Forward directory requests with /[uri] to /[uri]/
-			if(requri_enc.back() != '/'){
-				requri_enc += '/';
+			if(requri_enc[qv-1] != '/'){
+				requri_enc.insert(qv,"/");
 				spres.FormatHeader("Location",requri_enc.c_str());
 				throw(StreamProtocolHTTPresponse::STATUS_303);
 			}

@@ -81,7 +81,7 @@ bool HTTPListDir::Generate(const char *path, const char *uri, const ServerInterf
 
 	len = snprintf(buffer1,sizeof(buffer1),"<!DOCTYPE html>\r\n"
 		"<html><head><title>%s</title></head><body><h1>%s</h1>"
-		"<a href=\"..\">..</a><br/>",uri,uri);
+		"<a href=\"../\">..</a><br/>",uri,uri);
 	psp->Append(buffer1,len);
 
 	//TODO: scandir to sort
