@@ -257,10 +257,6 @@ int main(int argc, const char **pargv){
 		epoll_ctl(efd,EPOLL_CTL_ADD,PythonServerManager::slist[i].first.fd,&event1);
 	}
 
-	event1.data.ptr = &PythonServerManager::slist[0].first;
-	event1.events = EPOLLIN;
-	epoll_ctl(efd,EPOLL_CTL_ADD,PythonServerManager::slist[0].first.fd,&event1);
-
 	std::queue<Protocol::ClientProtocol *> taskq; //task queue for intensive (parallelized) work
 	for(;;){
 		for(int n = epoll_wait(efd,events,MAX_EVENTS,-1), i = 0; i < n; ++i){
