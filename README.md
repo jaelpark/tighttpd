@@ -1,3 +1,3 @@
 # tighttpd
 
-An educational HTTP server, written in a tight schedule. This is an ongoing coursework project.
+An educational HTTP server as a coursework project, written in a tight schedule.
