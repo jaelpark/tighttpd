@@ -190,6 +190,7 @@ public:
 	size_t datal; //client Content-Length
 	size_t datac; //POST pointer
 	bool feedback; //cgi state feedback read
+	bool empty; //cgi fully read
 	struct timespec ts; //cgi timeout counter
 };
 

@@ -151,7 +151,8 @@ bool StreamProtocolHTTPresponse::Read(){
 
 //Send the response (or part of it) to the client. Returns true when everything has been sent.
 bool StreamProtocolHTTPresponse::Write(){
-	tbb_string spresstr(buffer.begin(),buffer.end());
+	//tbb_string spresstr(buffer.begin(),buffer.end());
+	tbb_string spresstr(buffer.begin(),buffer.begin()+std::min((size_t)4096,buffer.size()));
 	ssize_t res = spresstr.size();
 	ssize_t len = socket.Send(spresstr.c_str(),res);
 	//printf("--------\n%s--------\n",spresstr.c_str()); //debug
@@ -161,7 +162,7 @@ bool StreamProtocolHTTPresponse::Write(){
 		return true;
 	}
 
-	if(len == res){
+	if(len >= buffer.size()){
 		state = STATE_SUCCESS;
 		return true;
 	}else buffer.erase(buffer.begin(),buffer.begin()+len);
@@ -250,7 +251,8 @@ StreamProtocolData::~StreamProtocolData(){
 
 //Send (possibly automatically generated) data buffer (or part of it).
 bool StreamProtocolData::Write(){
-	tbb_string spresstr(buffer.begin(),buffer.end());
+	//tbb_string spresstr(buffer.begin(),buffer.end());
+	tbb_string spresstr(buffer.begin(),buffer.begin()+std::min((size_t)4096,buffer.size()));
 	ssize_t res = spresstr.size();
 	ssize_t len = socket.Send(spresstr.c_str(),res);
 
@@ -259,7 +261,7 @@ bool StreamProtocolData::Write(){
 		return true;
 	}
 
-	if(len == res){
+	if(len >= buffer.size()){
 		state = STATE_SUCCESS;
 		return true;
 	}else buffer.erase(buffer.begin(),buffer.begin()+len);
@@ -336,7 +338,7 @@ bool StreamProtocolFile::Open(const char *path){
 	return true;
 }
 
-StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0), feedback(false){
+StreamProtocolCgi::StreamProtocolCgi(Socket::ClientSocket _socket) : StreamProtocol(_socket), pid(0), feedback(false), empty(false){
 	//
 }
 
@@ -349,19 +351,19 @@ StreamProtocolCgi::~StreamProtocolCgi(){
 bool StreamProtocolCgi::Write(){
 	char buffer1[4096];
 	errno = 0;
-	ssize_t res = read(pipefdi[0],buffer1,sizeof(buffer1));
-	if((res < 0 && errno != EAGAIN) || res == 0){
-		state = STATE_SUCCESS;
-		return true;
-	}
-	if((res < 0 && errno == EAGAIN)){
-		struct timespec ts1;
-		clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts1);
-		long dt = ts1.tv_nsec-ts.tv_nsec;
-		if(dt < 5e9) //TODO: user defined CGI timeout
-			return false;
-		state = STATE_SUCCESS;
-		return true;
+	ssize_t res = 0;
+	if(!empty){
+		res = read(pipefdi[0],buffer1,sizeof(buffer1));
+		if((res < 0 && errno != EAGAIN) || res == 0)
+			empty = true;
+		if((res < 0 && errno == EAGAIN)){
+			struct timespec ts1;
+			clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts1);
+			long dt = ts1.tv_nsec-ts.tv_nsec;
+			if(dt < 5e9) //TODO: user defined CGI timeout
+				return false;
+			empty = true;
+		}
 	}
 
 	errno = 0;
@@ -393,6 +395,7 @@ bool StreamProtocolCgi::Write(){
 		//or when send() failed to deliver everything.
 		if(buffer.size() > 0){
 			tbb_string spresstr(buffer.begin(),buffer.end());
+			//tbb_string spresstr(buffer.begin(),buffer.begin()+std::min((size_t)4096,buffer.size()));
 			ssize_t len = socket.Send(spresstr.c_str(),spresstr.size());
 
 			if((len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || len == 0){
@@ -458,6 +461,7 @@ bool StreamProtocolCgi::Read(){
 void StreamProtocolCgi::Reset(){
 	state = STATE_PENDING;
 	feedback = false;
+	empty = false;
 	buffer.clear();
 	envbuf.clear();
 	envptr.clear();
@@ -581,13 +585,13 @@ ClientProtocol::POLL ClientProtocolHTTP::Poll(uint sflag1){
 
 		switch(content){
 		case CONTENT_DATA:
-			psp = (StreamProtocolData*)&spdata;
+			psp = &spdata;
 			break;
 		case CONTENT_FILE:
-			psp = (StreamProtocolData*)&spfile;
+			psp = &spfile;
 			break;
 		case CONTENT_CGI:
-			psp = (StreamProtocolData*)&spcgi;
+			psp = &spcgi;
 			break;
 		}
 		state = STATE_SEND_DATA;
